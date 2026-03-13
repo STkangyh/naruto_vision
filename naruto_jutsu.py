@@ -49,11 +49,38 @@ def _distance(lm, a, b):
     return math.sqrt(dx * dx + dy * dy)
 
 
+def _palm_facing_up(lm):
+    """
+    손바닥이 위를 향하는지 판별.
+    손목(WRIST)의 z가 중지 MCP(MIDDLE_MCP)의 z보다 크면
+    손등이 카메라 쪽 → 손바닥이 위(천장)를 향하는 상태.
+    """
+    return lm[WRIST].z > lm[MIDDLE_MCP].z
+
+
+def _only_index_middle_up(lm):
+    """검지·중지는 펴고, 약지·새끼는 접힌 상태 (엄지는 무관)."""
+    index_up  = _tip_above_mcp(lm, INDEX_TIP,  INDEX_MCP)
+    middle_up = _tip_above_mcp(lm, MIDDLE_TIP, MIDDLE_MCP)
+    ring_up   = _tip_above_mcp(lm, RING_TIP,   RING_MCP)
+    pinky_up  = _tip_above_mcp(lm, PINKY_TIP,  PINKY_MCP)
+    return index_up and middle_up and not ring_up and not pinky_up
+
+
+def detect_katon_two_hands(lm_list_all: list) -> bool:
+    """
+    KATON 제스처: 두 손 모두 검지+중지+엄지가 위로 핀 상태.
+    lm_list_all: 감지된 모든 손의 랜드마크 리스트.
+    """
+    if len(lm_list_all) < 2:
+        return False
+    return all(_only_index_middle_up(lm) for lm in lm_list_all)
+
+
 def count_fingers(lm):
     """펴진 손가락 수 반환 (엄지 제외 4개 + 엄지 1개)."""
     count = 0
-    # 엄지: x축 기준
-    if lm[THUMB_TIP].x < lm[THUMB_MCP].x:   # 오른손 기준
+    if lm[THUMB_TIP].x < lm[THUMB_MCP].x:
         count += 1
     for tip, mcp in [(INDEX_TIP, INDEX_MCP), (MIDDLE_TIP, MIDDLE_MCP),
                      (RING_TIP, RING_MCP), (PINKY_TIP, PINKY_MCP)]:
@@ -68,42 +95,37 @@ def count_fingers(lm):
 
 def detect_gesture(lm):
     """
-    손 랜드마크에서 나루토 기술 제스처를 판별한다.
+    단일 손 랜드마크에서 나루토 기술 제스처를 판별한다.
+    KATON은 양손 제스처이므로 detect_katon_two_hands() 로 별도 처리.
 
     반환값:
         str | None  – 감지된 기술 이름 또는 None
     """
-    # 각 손가락 펴짐 여부
     thumb_up   = lm[THUMB_TIP].x  < lm[THUMB_MCP].x
     index_up   = _tip_above_mcp(lm, INDEX_TIP,  INDEX_MCP)
     middle_up  = _tip_above_mcp(lm, MIDDLE_TIP, MIDDLE_MCP)
     ring_up    = _tip_above_mcp(lm, RING_TIP,   RING_MCP)
     pinky_up   = _tip_above_mcp(lm, PINKY_TIP,  PINKY_MCP)
 
-    fingers = [thumb_up, index_up, middle_up, ring_up, pinky_up]
-    n_up = sum(fingers)
+    n_up = sum([thumb_up, index_up, middle_up, ring_up, pinky_up])
 
-    # ── 라센간: 주먹 (모든 손가락 접힘) ──────────────
-    if n_up == 0:
+    # ── 라센간: 손 활짝 핌 + 손바닥이 위를 향함 ─────────
+    if n_up == 5 and _palm_facing_up(lm):
         return "RASENGAN"
 
-    # ── 차크라 집중: 엄지+검지만 핀 (총기 모양) ──────
+    # ── 차크라 집중: 엄지+검지만 핀 (총기 모양) ──────────
     if thumb_up and index_up and not middle_up and not ring_up and not pinky_up:
         return "CHAKRA_FOCUS"
 
-    # ── 카게부신: 검지+중지 (V/평화) ─────────────────
+    # ── 카게부신: 검지+중지 (V사인), 나머지 접힘 ──────────
     if not thumb_up and index_up and middle_up and not ring_up and not pinky_up:
         return "KAGE_BUNSHIN"
 
-    # ── 화둔: 손 활짝 핌 (5 손가락 모두) ─────────────
-    if n_up == 5:
-        return "KATON"
-
-    # ── 뇌둔: 검지만 핌 ──────────────────────────────
+    # ── 뇨이보: 검지만 핌 ─────────────────────────────────
     if not thumb_up and index_up and not middle_up and not ring_up and not pinky_up:
         return "RAIKIRI"
 
-    # ── 풍둔: 소지(새끼)+엄지 (shaka 🤙) ─────────────
+    # ── 풍둔: 엄지+새끼 (shaka) ──────────────────────────
     if thumb_up and not index_up and not middle_up and not ring_up and pinky_up:
         return "FUTON"
 
@@ -115,35 +137,58 @@ def detect_gesture(lm):
 # ───────────────────────────────────────────────
 
 class Particle:
-    def __init__(self, x, y, color, speed=3, size=4, lifetime=30):
+    def __init__(self, x, y, color, speed=3, size=4, lifetime=30,
+                 vx=None, vy=None, gravity=0.15, shrink=0.1, kind="normal"):
         self.x = float(x)
         self.y = float(y)
         self.color = color
-        self.size = size
+        self.size = float(size)
         self.lifetime = lifetime
         self.age = 0
-        angle = np.random.uniform(0, 2 * math.pi)
-        spd   = np.random.uniform(speed * 0.5, speed * 1.5)
-        self.vx = math.cos(angle) * spd
-        self.vy = math.sin(angle) * spd
+        self.gravity = gravity
+        self.shrink = shrink
+        self.kind = kind          # "normal" | "fire" | "ember" | "smoke"
+        if vx is not None and vy is not None:
+            self.vx = float(vx)
+            self.vy = float(vy)
+        else:
+            angle = np.random.uniform(0, 2 * math.pi)
+            spd   = np.random.uniform(speed * 0.5, speed * 1.5)
+            self.vx = math.cos(angle) * spd
+            self.vy = math.sin(angle) * spd
 
     def update(self):
         self.x += self.vx
         self.y += self.vy
         self.age += 1
-        # 중력
-        self.vy += 0.15
-        self.size = max(1, self.size - 0.1)
+        self.vy += self.gravity
+        self.size = max(0.5, self.size - self.shrink)
+        # 불꽃은 수평으로 서서히 퍼짐
+        if self.kind in ("fire", "ember"):
+            self.vx *= 0.96
 
     @property
     def alive(self):
-        return self.age < self.lifetime
+        return self.age < self.lifetime and self.size > 0.5
 
     def draw(self, frame):
         alpha = 1.0 - self.age / self.lifetime
         r, g, b = self.color
-        cv.circle(frame, (int(self.x), int(self.y)), max(1, int(self.size)),
-                  (int(b * alpha), int(g * alpha), int(r * alpha)), -1)
+        ix, iy = int(self.x), int(self.y)
+        sz = max(1, int(self.size))
+        h, w = frame.shape[:2]
+        if not (0 <= ix < w and 0 <= iy < h):
+            return
+
+        if self.kind == "smoke":
+            # 연기: 반투명 회색 원
+            overlay = frame.copy()
+            cv.circle(overlay, (ix, iy), sz,
+                      (int(180 * alpha), int(180 * alpha), int(180 * alpha)), -1)
+            cv.addWeighted(overlay, 0.18 * alpha, frame, 1 - 0.18 * alpha, 0, frame)
+        else:
+            cv.circle(frame, (ix, iy), sz,
+                      (int(b * alpha), int(g * alpha), int(r * alpha)), -1)
 
 
 # ───────────────────────────────────────────────
@@ -171,6 +216,13 @@ class JutsuEffect:
         self.frame_count   = 0          # 기술 활성화 이후 프레임 수
         self.palm_center   = (320, 240)
         self._spin_angle   = 0.0        # 나선 회전용
+        # KATON 전용 상태
+        self._katon_ball_x  = 0.0
+        self._katon_ball_y  = 0.0
+        self._katon_phase   = "charge"  # "charge" → "expand" → "smoke" → "clear"
+        self._katon_radius  = 0.0
+        self._katon_vx      = 0.0
+        self._katon_vy      = 0.0
 
     # ── 외부 인터페이스 ────────────────────────────────
 
@@ -181,6 +233,15 @@ class JutsuEffect:
             self.frame_count  = 0
             self.particles.clear()
             self._spin_angle  = 0.0
+            # KATON 초기화
+            if jutsu_name == "KATON":
+                cx, cy = palm_center
+                self._katon_ball_x = float(cx)
+                self._katon_ball_y = float(cy)
+                self._katon_phase  = "charge"
+                self._katon_radius = 0.0
+                self._katon_vx     = 0.0
+                self._katon_vy     = 0.0
         self.palm_center = palm_center
 
     def deactivate(self):
@@ -199,7 +260,17 @@ class JutsuEffect:
         cx, cy = self.palm_center
         h, w   = frame.shape[:2]
 
-        self._spawn_particles(cx, cy, color)
+        # KATON은 파티클/효과 좌표를 화구 위치 기준으로 처리
+        spawn_cx, spawn_cy = cx, cy
+        if self.active_jutsu == "KATON":
+            spawn_cx = int(self._katon_ball_x)
+            spawn_cy = int(self._katon_ball_y)
+
+        # smoke/clear 단계는 파티클 새로 생성 안 함 (기존 파티클만 소멸)
+        if self.active_jutsu == "KATON" and self._katon_phase in ("smoke", "clear"):
+            pass
+        else:
+            self._spawn_particles(spawn_cx, spawn_cy, color)
 
         # 파티클 업데이트 & 그리기
         self.particles = [p for p in self.particles if p.alive]
@@ -221,16 +292,62 @@ class JutsuEffect:
     def _spawn_particles(self, cx, cy, color):
         jutsu = self.active_jutsu
         if jutsu == "RASENGAN":
-            for _ in range(8):
-                self.particles.append(Particle(cx, cy, color, speed=5, size=6, lifetime=25))
+            # 코어 크기에 비례해서 파티클 속도·크기·수 증가
+            core_r = min(18 + self.frame_count * 0.6, 120)
+            count  = int(8 + core_r * 0.12)          # 최대 ~22개
+            spd    = 4 + core_r * 0.05               # 최대 ~10
+            sz     = 5 + core_r * 0.06               # 최대 ~13
+            for _ in range(count):
+                self.particles.append(
+                    Particle(cx, cy, color,
+                             speed=spd, size=sz, lifetime=28))
         elif jutsu == "KATON":
-            for _ in range(12):
-                fire_color = (
-                    np.random.randint(200, 255),
-                    np.random.randint(50, 150),
-                    0
-                )
-                self.particles.append(Particle(cx, cy, fire_color, speed=6, size=8, lifetime=20))
+            # charge 단계: 손 주변에 불꽃이 안쪽으로 모임
+            if self._katon_phase == "charge":
+                bx, by = int(self._katon_ball_x), int(self._katon_ball_y)
+                for _ in range(8):
+                    ang = np.random.uniform(0, 2 * math.pi)
+                    r   = np.random.uniform(self._katon_radius * 0.8,
+                                            self._katon_radius * 1.4 + 10)
+                    px  = bx + math.cos(ang) * r
+                    py  = by + math.sin(ang) * r
+                    dvx = (bx - px) * 0.12 + np.random.uniform(-1.5, 1.5)
+                    dvy = (by - py) * 0.12 + np.random.uniform(-1.5, 1.5)
+                    fc  = (np.random.randint(220, 255),
+                           np.random.randint(80, 200), 0)
+                    self.particles.append(
+                        Particle(px, py, fc,
+                                 size=np.random.uniform(4, 10),
+                                 lifetime=14, vx=dvx, vy=dvy,
+                                 gravity=-0.04, shrink=0.25, kind="fire"))
+            # expand 단계: 화구 외곽에서 불꽃이 사방으로 터짐
+            elif self._katon_phase == "expand":
+                bx, by = int(self._katon_ball_x), int(self._katon_ball_y)
+                for _ in range(14):
+                    ang = np.random.uniform(0, 2 * math.pi)
+                    spd = np.random.uniform(5, 18)
+                    fc  = (np.random.randint(210, 255),
+                           np.random.randint(60, 180), 0)
+                    self.particles.append(
+                        Particle(bx, by, fc,
+                                 size=np.random.uniform(8, 22),
+                                 lifetime=np.random.randint(20, 40),
+                                 vx=math.cos(ang) * spd,
+                                 vy=math.sin(ang) * spd,
+                                 gravity=0.06, shrink=0.2, kind="fire"))
+                # 불씨
+                for _ in range(8):
+                    ang = np.random.uniform(0, 2 * math.pi)
+                    spd = np.random.uniform(3, 10)
+                    ec  = (np.random.randint(200, 255),
+                           np.random.randint(120, 220), 0)
+                    self.particles.append(
+                        Particle(bx, by, ec,
+                                 size=np.random.uniform(2, 5),
+                                 lifetime=np.random.randint(30, 60),
+                                 vx=math.cos(ang) * spd,
+                                 vy=math.sin(ang) * spd,
+                                 gravity=0.15, shrink=0.04, kind="ember"))
         elif jutsu == "RAIKIRI":
             for _ in range(6):
                 self.particles.append(Particle(cx, cy, (255, 255, 180), speed=8, size=4, lifetime=15))
@@ -254,7 +371,7 @@ class JutsuEffect:
         bgr   = (color[2], color[1], color[0])  # RGB→BGR
 
         if jutsu == "RASENGAN":
-            self._draw_rasengan(frame, cx, cy, bgr, angle)
+            self._draw_rasengan(frame, cx, cy, bgr, angle, t)
 
         elif jutsu == "KATON":
             self._draw_katon(frame, cx, cy, t)
@@ -272,37 +389,165 @@ class JutsuEffect:
             self._draw_chakra_focus(frame, cx, cy, bgr, t)
 
     # ─── 라센간 ─────────────────────────────────────────
-    def _draw_rasengan(self, frame, cx, cy, bgr, angle):
+    def _draw_rasengan(self, frame, cx, cy, bgr, angle, t):
+        # 유지 시간에 따라 코어 반지름 성장 (최대 120px)
+        core_r  = int(min(18 + t * 0.6, 120))
+        # 궤도 링도 코어에 맞춰 함께 커짐
+        orbit_r = core_r + 27
+        ring_max = core_r + 42
+
         overlay = frame.copy()
-        # 바깥 나선 고리
-        for r in range(60, 20, -10):
-            alpha_circle = 0.3
+        # 바깥 나선 고리 (코어 크기에 맞춰 동적으로)
+        for r in range(ring_max, core_r, -10):
             cv.circle(overlay, (cx, cy), r, bgr, 2)
         cv.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
         # 회전하는 궤도 점
         for i in range(12):
-            a = math.radians(angle + i * 30)
-            r = 45
-            px = int(cx + r * math.cos(a))
-            py = int(cy + r * math.sin(a))
-            cv.circle(frame, (px, py), 4, bgr, -1)
+            a  = math.radians(angle + i * 30)
+            px = int(cx + orbit_r * math.cos(a))
+            py = int(cy + orbit_r * math.sin(a))
+            dot_r = max(3, int(4 + core_r * 0.04))
+            cv.circle(frame, (px, py), dot_r, bgr, -1)
+
+        # 글로우 (코어가 커질수록 강해짐)
+        glow_alpha = min(0.45, 0.1 + t * 0.003)
+        glow_overlay = frame.copy()
+        cv.circle(glow_overlay, (cx, cy), core_r + 20, bgr, -1)
+        cv.addWeighted(glow_overlay, glow_alpha, frame, 1 - glow_alpha, 0, frame)
 
         # 중심 코어
-        cv.circle(frame, (cx, cy), 18, bgr, -1)
-        cv.circle(frame, (cx, cy), 22, (255, 255, 255), 2)
+        cv.circle(frame, (cx, cy), core_r, bgr, -1)
+        cv.circle(frame, (cx, cy), core_r + 4, (255, 255, 255), 2)
+        # 코어 흰 중심점 (항상 밝게)
+        cv.circle(frame, (cx, cy), max(6, core_r // 4), (255, 255, 255), -1)
 
     # ─── 화둔 ────────────────────────────────────────────
     def _draw_katon(self, frame, cx, cy, t):
-        overlay = frame.copy()
-        # 여러 크기 불 원
-        for i, (r, a) in enumerate([(70, 0.4), (50, 0.5), (30, 0.6)]):
-            flicker = int(5 * math.sin(t * 0.3 + i))
-            cv.circle(overlay, (cx, cy), r + flicker,
-                      (0, int(60 + i*40), 255 - i*40), -1)
-        cv.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-        # 중심 밝은 코어
-        cv.circle(frame, (cx, cy), 15, (0, 200, 255), -1)
+        """화둔·호화구: charge → expand → smoke → clear 4단계."""
+        h, w = frame.shape[:2]
+        diag = math.hypot(w, h)          # 화면 대각선 길이
+
+        # ── 단계 전이 타이머 (프레임 수 기준) ─────────────
+        # charge : 0~24  (불덩이 커지기)
+        # expand : 25~54 (화면 전체로 확산)
+        # smoke  : 55~84 (검은 연기로 뿌옇게)
+        # clear  : 85~   (연기 걷힘 → 자동 deactivate)
+
+        CHARGE_END = 24
+        EXPAND_END = 54
+        SMOKE_END  = 84
+
+        if self._katon_phase == "charge":
+            self._katon_ball_x = float(cx)
+            self._katon_ball_y = float(cy)
+            self._katon_radius = min(t * 3.0, 60.0)
+            if t >= CHARGE_END:
+                self._katon_phase  = "expand"
+                self._katon_radius = 60.0
+
+        elif self._katon_phase == "expand":
+            prog = (t - CHARGE_END) / (EXPAND_END - CHARGE_END)  # 0→1
+            prog = min(prog, 1.0)
+            # 화구 반지름: 60 → 화면 대각선의 0.8배
+            self._katon_radius = 60.0 + prog * diag * 0.85
+            if t >= EXPAND_END:
+                self._katon_phase = "smoke"
+
+        elif self._katon_phase == "smoke":
+            if t >= SMOKE_END:
+                self._katon_phase = "clear"
+
+        elif self._katon_phase == "clear":
+            if t >= SMOKE_END + 35:
+                # 이펙트 종료
+                self.deactivate()
+                return
+
+        # ── 렌더링 ──────────────────────────────────────
+        bx = int(self._katon_ball_x)
+        by = int(self._katon_ball_y)
+        br = int(self._katon_radius)
+
+        if self._katon_phase == "charge":
+            flicker = int(6 * math.sin(t * 1.2))
+            # 글로우
+            overlay = frame.copy()
+            for gr, gc in [(br + flicker + 30, (0, 20, 180)),
+                           (br + flicker + 16, (0, 60, 230)),
+                           (br + flicker +  5, (0, 110, 255))]:
+                if gr > 0:
+                    cv.circle(overlay, (bx, by), gr, gc, -1)
+            cv.addWeighted(overlay, 0.38, frame, 0.62, 0, frame)
+            # 화구 본체
+            for fr_, fc_ in [(br + flicker,      (0,  55, 255)),
+                             (br + flicker - 10,  (0, 130, 255)),
+                             (br + flicker - 20,  (0, 200, 255)),
+                             (max(br // 3, 8),    (210, 245, 255))]:
+                if fr_ > 0:
+                    cv.circle(frame, (bx, by), fr_, fc_, -1)
+            # 표면 불꽃
+            np.random.seed(t % 60)
+            for _ in range(10):
+                ang  = np.random.uniform(0, 2 * math.pi)
+                dist = np.random.uniform(br * 0.5, br * 1.0 + flicker)
+                tx = bx + int(math.cos(ang) * dist)
+                ty = by + int(math.sin(ang) * dist)
+                cv.circle(frame, (tx, ty), np.random.randint(4, 11),
+                          (np.random.randint(0, 60),
+                           np.random.randint(100, 210), 255), -1)
+
+        elif self._katon_phase == "expand":
+            prog = (t - CHARGE_END) / (EXPAND_END - CHARGE_END)
+            prog = min(prog, 1.0)
+            # 화면 전체를 덮는 불덩이
+            # 바깥부터: 주황 → 안쪽: 흰 노랑
+            # alpha는 prog에 따라 강해짐
+            fire_alpha = min(0.92, 0.3 + prog * 0.65)
+            overlay = frame.copy()
+            overlay[:] = (0, 50, 255)          # 주황 (BGR)
+            cv.addWeighted(overlay, fire_alpha, frame, 1 - fire_alpha, 0, frame)
+
+            # 코어 원 (밝은 노랑)
+            core_r = max(int(br * (1.0 - prog * 0.6)), 10)
+            core_col = (int(200 * (1 - prog)), int(235 * (1 - prog * 0.3)), 255)
+            cv.circle(frame, (bx, by), core_r, core_col, -1)
+
+            # 화면 가장자리 글로우
+            for margin in [0, 6, 14]:
+                pts = np.array([[margin, margin],
+                                [w - margin, margin],
+                                [w - margin, h - margin],
+                                [margin, h - margin]], np.int32)
+                intensity = int(200 * (1 - margin / 20.0) * prog)
+                cv.polylines(frame, [pts], True,
+                             (0, intensity // 3, intensity), 3)
+
+        elif self._katon_phase == "smoke":
+            prog = (t - EXPAND_END) / (SMOKE_END - EXPAND_END)
+            prog = min(prog, 1.0)
+            # 검은 연기로 점점 뿌옇게
+            smoke_alpha = 0.15 + prog * 0.72
+            overlay = frame.copy()
+            overlay[:] = (30, 30, 30)
+            cv.addWeighted(overlay, smoke_alpha, frame, 1 - smoke_alpha, 0, frame)
+            # 흰 연기 질감 노이즈
+            noise_alpha = prog * 0.25
+            noise = np.random.randint(160, 220, frame.shape, dtype=np.uint8)
+            cv.addWeighted(noise, noise_alpha, frame, 1 - noise_alpha, 0, frame)
+
+        elif self._katon_phase == "clear":
+            prog = (t - SMOKE_END) / 35.0
+            prog = min(prog, 1.0)
+            # 연기가 걷히며 점점 투명해짐
+            smoke_alpha = max(0.0, 0.87 - prog * 0.87)
+            if smoke_alpha > 0.01:
+                overlay = frame.copy()
+                overlay[:] = (30, 30, 30)
+                cv.addWeighted(overlay, smoke_alpha, frame, 1 - smoke_alpha, 0, frame)
+                noise_alpha = smoke_alpha * 0.25
+                noise = np.random.randint(160, 220, frame.shape, dtype=np.uint8)
+                cv.addWeighted(noise, noise_alpha, frame, 1 - noise_alpha, 0, frame)
 
     # ─── 뇌절 ────────────────────────────────────────────
     def _draw_raikiri(self, frame, cx, cy, t):
@@ -343,8 +588,40 @@ class JutsuEffect:
 
     # ─── 카게부신 ─────────────────────────────────────────
     def _draw_kage_bunshin(self, frame, cx, cy, bgr, t):
+        h, w = frame.shape[:2]
+
+        # ── 3초(90프레임) 이상 유지 시 분신 2개 등장 ─────
+        BUNSHIN_THRESHOLD = 90  # frames
+        if t >= BUNSHIN_THRESHOLD:
+            # 등장 진행도 0→1 (30프레임에 걸쳐 서서히 나타남)
+            appear = min((t - BUNSHIN_THRESHOLD) / 30.0, 1.0)
+
+            # 분신 오프셋: 좌우로 벌어짐
+            spread = int(appear * 90)
+            offsets = [-spread, spread]   # 왼쪽 분신, 오른쪽 분신
+
+            for off_x in offsets:
+                # 프레임을 옆으로 밀어서 반투명하게 합성
+                M = np.float32([[1, 0, off_x], [0, 1, 0]])
+                ghost = cv.warpAffine(frame, M, (w, h))
+
+                # 연기 마스크: 분신 중심부를 흰색으로 밝힘 (등장 연출)
+                smoke_overlay = ghost.copy()
+                bx = cx + off_x
+                smoke_r = int(60 + 20 * math.sin(t * 0.15))
+                cv.circle(smoke_overlay, (bx, cy), smoke_r, (220, 220, 220), -1)
+                cv.addWeighted(smoke_overlay, 0.25 * appear, ghost, 1 - 0.25 * appear, 0, ghost)
+
+                # 분신을 메인 프레임에 반투명 합성
+                bunshin_alpha = 0.45 * appear
+                cv.addWeighted(ghost, bunshin_alpha, frame, 1 - bunshin_alpha, 0, frame)
+
+                # 분신 윤곽선 (파란 테두리 원)
+                if bx >= 0 and bx < w:
+                    cv.circle(frame, (bx, cy), int(30 * appear), bgr, 2)
+
+        # ── 연기 효과 (항상) ─────────────────────────────
         overlay = frame.copy()
-        # 연기 효과 (흰 반투명 원)
         for i in range(3):
             offset_x = int(40 * math.cos(math.radians(t * 3 + i * 120)))
             offset_y = int(20 * math.sin(math.radians(t * 3 + i * 120)))
@@ -352,9 +629,23 @@ class JutsuEffect:
             cv.circle(overlay, (cx + offset_x, cy + offset_y), r,
                       (220, 220, 220), -1)
         cv.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
-        # 중심 파란 도장 원
+
+        # ── 중심 파란 도장 원 ────────────────────────────
         cv.circle(frame, (cx, cy), 16, bgr, -1)
         cv.circle(frame, (cx, cy), 20, (255, 255, 255), 2)
+
+        # ── 3초 대기 중: 카운트다운 표시 ────────────────
+        if t < BUNSHIN_THRESHOLD:
+            remain = (BUNSHIN_THRESHOLD - t) / 30.0  # 남은 초
+            bar_w  = 80
+            bar_h  = 6
+            bx0    = cx - bar_w // 2
+            by0    = cy + 30
+            filled = int(bar_w * (1.0 - remain / 3.0))
+            cv.rectangle(frame, (bx0, by0), (bx0 + bar_w, by0 + bar_h),
+                         (80, 80, 80), -1)
+            cv.rectangle(frame, (bx0, by0), (bx0 + filled, by0 + bar_h),
+                         bgr, -1)
 
     # ─── 차크라 집중 ──────────────────────────────────────
     def _draw_chakra_focus(self, frame, cx, cy, bgr, t):
@@ -424,7 +715,7 @@ class NarutoJutsuRecognizer:
         options = HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=self.MODEL_PATH),
             running_mode=RunningMode.LIVE_STREAM,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=0.6,
             min_hand_presence_confidence=0.6,
             min_tracking_confidence=0.5,
@@ -471,8 +762,10 @@ class NarutoJutsuRecognizer:
         palm_center = (w // 2, h // 2)
 
         if self._latest_result and self._latest_result.hand_landmarks:
-            for lm_list in self._latest_result.hand_landmarks:
-                # 스켈레톤 그리기 (Tasks API)
+            all_lm = self._latest_result.hand_landmarks
+
+            # 모든 손 스켈레톤 먼저 그리기
+            for lm_list in all_lm:
                 self._draw_utils.draw_landmarks(
                     frame,
                     lm_list,
@@ -481,11 +774,28 @@ class NarutoJutsuRecognizer:
                     self._draw_styles.get_default_hand_connections_style(),
                 )
 
-                # 손바닥 중심 (WRIST 랜드마크)
-                wrist = lm_list[WRIST]
-                palm_center = (int(wrist.x * w), int(wrist.y * h))
-
-                gesture = detect_gesture(lm_list)
+            # ── KATON: 양손 모두 검지+중지만 위로 핀 상태 ──
+            if detect_katon_two_hands(all_lm):
+                gesture = "KATON"
+                # 효과 중심: 두 손 중지 끝(MIDDLE_TIP)의 중간점
+                mx = sum(lm[MIDDLE_TIP].x for lm in all_lm) / len(all_lm)
+                my = sum(lm[MIDDLE_TIP].y for lm in all_lm) / len(all_lm)
+                palm_center = (int(mx * w), int(my * h))
+            else:
+                # ── 단일 손 제스처 (첫 번째로 인식된 손) ───
+                for lm_list in all_lm:
+                    wrist = lm_list[WRIST]
+                    palm_center = (int(wrist.x * w), int(wrist.y * h))
+                    g = detect_gesture(lm_list)
+                    if g is not None:
+                        gesture = g
+                        # KATON이면 효과 중심을 중지 끝(MIDDLE_TIP)으로
+                        if g == "KATON":
+                            palm_center = (
+                                int(lm_list[MIDDLE_TIP].x * w),
+                                int(lm_list[MIDDLE_TIP].y * h),
+                            )
+                        break
 
         # 안정적 제스처 인식 (버퍼링)
         self._gesture_buffer.append(gesture)
@@ -550,12 +860,12 @@ class NarutoJutsuRecognizer:
 
 # 제스처별 정보 (패널 표시용)
 JUTSU_PANEL_INFO = [
-    ("RASENGAN",     "주먹 (모두 접힘)",  "RASENGAN",     (255, 160,  50)),
-    ("KAGE_BUNSHIN", "검지 + 중지",       "KAGE BUNSHIN", (200, 200, 255)),
-    ("KATON",        "손 활짝 (5개)",     "KATON",        ( 50,  80, 255)),
-    ("RAIKIRI",      "검지만",            "RAIKIRI",      (100, 220, 255)),
-    ("FUTON",        "엄지 + 새끼",       "FUTON",        (100, 220, 100)),
-    ("CHAKRA_FOCUS", "엄지 + 검지",       "CHAKRA FOCUS", (200,  80, 200)),
+    ("RASENGAN",     "손 활짝 + 손바닥 위",   "RASENGAN",     (255, 160,  50)),
+    ("KAGE_BUNSHIN", "검지 + 중지 (V)",        "KAGE BUNSHIN", (200, 200, 255)),
+    ("KATON",        "[양손] 검지+중지 위로",   "KATON",        ( 50,  80, 255)),
+    ("RAIKIRI",      "검지만",                 "RAIKIRI",      (100, 220, 255)),
+    ("FUTON",        "엄지 + 새끼",            "FUTON",        (100, 220, 100)),
+    ("CHAKRA_FOCUS", "엄지 + 검지",            "CHAKRA FOCUS", (200,  80, 200)),
 ]
 
 
