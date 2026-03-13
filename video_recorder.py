@@ -2,6 +2,7 @@ import cv2 as cv
 import numpy as np
 from datetime import datetime
 import os
+from naruto_jutsu import NarutoJutsuRecognizer, build_jutsu_panel
 
 
 class VideoRecorder:
@@ -13,7 +14,16 @@ class VideoRecorder:
         self.frame_height = 480
         self.fps = 20.0
         self.output_folder = "recordings"
-        
+
+        # 하단 패널 높이
+        self.panel_height = 180
+
+        # 나루토 기술 인식기
+        self.jutsu = NarutoJutsuRecognizer(enabled=True)
+
+        # 내부 프레임 카운터 (패널 애니메이션용)
+        self._frame_count = 0
+
         # 녹화 파일 저장 폴더 생성
         if not os.path.exists(self.output_folder):
             os.makedirs(self.output_folder)
@@ -115,14 +125,15 @@ class VideoRecorder:
             (0, 255, 0),
             2
         )
-        
+
         # 사용 방법 안내
+        hint = "SPACE: Record | N: Naruto Mode | ESC: Exit"
         cv.putText(
             frame,
-            "SPACE: Start/Stop Recording | ESC: Exit",
+            hint,
             (10, self.frame_height - 20),
             cv.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.45,
             (255, 255, 255),
             1
         )
@@ -131,54 +142,80 @@ class VideoRecorder:
         """메인 루프 실행"""
         if not self.initialize_camera():
             return
-        
-        print("\n=== Video Recorder ===")
-        print("SPACE: 녹화 시작/중지")
-        print("ESC: 프로그램 종료")
-        print("=====================\n")
+
+        print("\n=== Video Recorder + Naruto Jutsu ===")
+        print("SPACE : 녹화 시작/중지")
+        print("N     : 나루토 모드 ON/OFF")
+        print("ESC   : 프로그램 종료")
+        print("=====================================\n")
+        print("나루토 제스처 목록:")
+        print("  ✊ 주먹           → 🌀 라센간 (RASENGAN)")
+        print("  ✌️  검지+중지      → 影 카게부신 (KAGE BUNSHIN)")
+        print("  🖐️  손 활짝        → 🔥 화둔·호화구 (KATON)")
+        print("  ☝️  검지만         → ⚡ 뇨이보 (RAIKIRI)")
+        print("  🤙 엄지+새끼       → 🌪️ 풍둔·나선수리검 (FUTON)")
+        print("  👆 엄지+검지(총모양)→ 💜 차크라 집중 (CHAKRA FOCUS)")
+        print()
         print("카메라 창이 열립니다. 카메라 창을 클릭하여 활성화하세요.")
-        
-        # 윈도우 생성 및 위치 설정
+
+        # 윈도우 생성 – 카메라 + 하단 패널 높이
+        win_w = self.frame_width
+        win_h = self.frame_height + self.panel_height
         cv.namedWindow('Video Recorder', cv.WINDOW_NORMAL)
-        cv.resizeWindow('Video Recorder', self.frame_width, self.frame_height)
-        
+        cv.resizeWindow('Video Recorder', win_w, win_h)
+
         try:
             while True:
                 ret, frame = self.cap.read()
-                
+
                 if not ret:
                     print("Error: 프레임을 읽을 수 없습니다.")
                     break
-                
-                # 프레임 처리
-                display_frame = frame.copy()
-                
+
+                # 좌우 반전 (거울 모드 – 셀카처럼 자연스럽게)
+                frame = cv.flip(frame, 1)
+
+                # ── 나루토 손 인식 & 효과 적용 ──────────────────
+                frame = self.jutsu.process_frame(frame)
+
+                # ── 모드 표시 오버레이 ───────────────────────────
                 if self.is_recording:
-                    # Record 모드
-                    self.draw_recording_indicator(display_frame)
-                    # 프레임 저장
-                    self.writer.write(frame)
+                    self.draw_recording_indicator(frame)
+                    self.writer.write(frame)          # 녹화는 카메라 영역만
                 else:
-                    # Preview 모드
-                    self.draw_preview_indicator(display_frame)
-                
-                # 화면에 표시 - 실시간 카메라 영상
-                cv.imshow('Video Recorder', display_frame)
-                
+                    self.draw_preview_indicator(frame)
+
+                # ── 하단 패널 생성 & 합성 ────────────────────────
+                panel = build_jutsu_panel(
+                    panel_w        = self.frame_width,
+                    panel_h        = self.panel_height,
+                    active_jutsu   = self.jutsu.current_gesture,
+                    naruto_enabled = self.jutsu.enabled,
+                    is_recording   = self.is_recording,
+                    frame_count    = self._frame_count,
+                )
+                display = np.vstack([frame, panel])
+
+                self._frame_count += 1
+
+                # 화면에 표시
+                cv.imshow('Video Recorder', display)
+
                 # 키 입력 처리
                 key = cv.waitKey(1) & 0xFF
-                
-                if key == 27:  # ESC 키
+
+                if key == 27:        # ESC 키
                     print("프로그램 종료")
                     break
-                elif key == 32:  # SPACE 키
+                elif key == 32:      # SPACE 키
                     if self.is_recording:
                         self.stop_recording()
                     else:
                         self.start_recording()
-        
+                elif key in (ord('n'), ord('N')):   # N 키
+                    self.jutsu.toggle()
+
         finally:
-            # 정리
             self.cleanup()
     
     def cleanup(self):
