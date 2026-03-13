@@ -550,12 +550,12 @@ class NarutoJutsuRecognizer:
 
 # 제스처별 정보 (패널 표시용)
 JUTSU_PANEL_INFO = [
-    ("RASENGAN",     "✊ 주먹",        "🌀 RASENGAN",      (255, 160,  50)),  # 파랑
-    ("KAGE_BUNSHIN", "✌  검지+중지",   "影 KAGE BUNSHIN",  (200, 200, 255)),  # 흰
-    ("KATON",        "🖐 손 활짝",     "🔥 KATON",         ( 50,  80, 255)),  # 빨강
-    ("RAIKIRI",      "☝ 검지만",      "⚡ RAIKIRI",        (100, 220, 255)),  # 노랑
-    ("FUTON",        "🤙 엄지+새끼",   "🌪 FUTON",         (100, 220, 100)),  # 초록
-    ("CHAKRA_FOCUS", "👆 엄지+검지",   "💜 CHAKRA",        (200,  80, 200)),  # 보라
+    ("RASENGAN",     "주먹 (모두 접힘)",  "RASENGAN",     (255, 160,  50)),
+    ("KAGE_BUNSHIN", "검지 + 중지",       "KAGE BUNSHIN", (200, 200, 255)),
+    ("KATON",        "손 활짝 (5개)",     "KATON",        ( 50,  80, 255)),
+    ("RAIKIRI",      "검지만",            "RAIKIRI",      (100, 220, 255)),
+    ("FUTON",        "엄지 + 새끼",       "FUTON",        (100, 220, 100)),
+    ("CHAKRA_FOCUS", "엄지 + 검지",       "CHAKRA FOCUS", (200,  80, 200)),
 ]
 
 
@@ -595,6 +595,8 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
                          (160, 160, 160), scale=0.5, center=True)
         _draw_panel_text(panel, "손을 카메라에 보여주세요",  LEFT_W // 2, panel_h // 2 + 6,
                          (100, 100, 100), scale=0.42, center=True)
+        _draw_panel_text(panel, "* 오른손 기준",  LEFT_W // 2, panel_h - 26,
+                         (80, 130, 80), scale=0.40, center=True)
     else:
         info = JutsuEffect.JUTSU_INFO[active_jutsu]
         color = info["color"]
@@ -639,6 +641,11 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
     card_w = RIGHT_W // COLS
     card_h = panel_h // ROWS
     pad = 6
+
+    # 우측 상단: 오른손 기준 안내
+    _draw_panel_text(panel, "* 오른손 기준",
+                     LEFT_W + RIGHT_W - 8, 6,
+                     (80, 130, 80), scale=0.38, center=False)
 
     for idx, (key, gesture_label, jutsu_label, color) in enumerate(JUTSU_PANEL_INFO):
         col = idx % COLS
