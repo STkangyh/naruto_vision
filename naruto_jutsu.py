@@ -4,6 +4,7 @@ import mediapipe as mp
 import time
 import math
 import os
+from PIL import Image, ImageDraw, ImageFont
 
 from mediapipe.tasks.python.core.base_options import BaseOptions
 from mediapipe.tasks.python.vision import (
@@ -585,14 +586,14 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
     #  좌측: 활성 기술 / 모드 표시
     # ════════════════════════════════════════════════════
     if not naruto_enabled:
-        _draw_panel_text(panel, "NARUTO MODE: OFF", LEFT_W // 2, panel_h // 2,
+        _draw_panel_text(panel, "NARUTO MODE: OFF", LEFT_W // 2, panel_h // 2 - 10,
                          (120, 120, 120), scale=0.7, center=True)
     elif active_jutsu is None:
-        _draw_panel_text(panel, "NARUTO MODE: ON",  LEFT_W // 2, 28,
+        _draw_panel_text(panel, "NARUTO MODE: ON",  LEFT_W // 2, 14,
                          (0, 170, 255), scale=0.65, center=True)
-        _draw_panel_text(panel, "제스처를 취해보세요",  LEFT_W // 2, panel_h // 2 - 10,
+        _draw_panel_text(panel, "제스처를 취해보세요",  LEFT_W // 2, panel_h // 2 - 18,
                          (160, 160, 160), scale=0.5, center=True)
-        _draw_panel_text(panel, "손을 카메라에 보여주세요",  LEFT_W // 2, panel_h // 2 + 18,
+        _draw_panel_text(panel, "손을 카메라에 보여주세요",  LEFT_W // 2, panel_h // 2 + 6,
                          (100, 100, 100), scale=0.42, center=True)
     else:
         info = JutsuEffect.JUTSU_INFO[active_jutsu]
@@ -600,11 +601,11 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
         bgr   = (color[2], color[1], color[0])
 
         # 기술 이름
-        _draw_panel_text(panel, info["name"], LEFT_W // 2, 30,
+        _draw_panel_text(panel, info["name"], LEFT_W // 2, 12,
                          bgr, scale=0.7, center=True, thickness=2)
 
         # 구분선
-        cv.line(panel, (20, 45), (LEFT_W - 20, 45), bgr, 1)
+        cv.line(panel, (20, 40), (LEFT_W - 20, 40), bgr, 1)
 
         # 펄스 파워 바
         bar_x1, bar_y  = 20, 60
@@ -667,10 +668,10 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
         cx_card    = x0 + card_w // 2
 
         # 제스처 레이블
-        _draw_panel_text(panel, gesture_label, cx_card, y0 + 22,
+        _draw_panel_text(panel, gesture_label, cx_card, y0 + 10,
                          text_color, scale=0.42, center=True)
         # 기술 레이블
-        _draw_panel_text(panel, jutsu_label,   cx_card, y0 + 42,
+        _draw_panel_text(panel, jutsu_label,   cx_card, y0 + 32,
                          text_color if not is_active else color,
                          scale=0.44, center=True,
                          thickness=2 if is_active else 1)
@@ -684,12 +685,98 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
     return panel
 
 
-def _draw_panel_text(img, text, x, y, color, scale=0.5, thickness=1, center=False):
-    """패널 텍스트 헬퍼."""
-    font = cv.FONT_HERSHEY_SIMPLEX
-    if center:
-        (tw, th), _ = cv.getTextSize(text, font, scale, thickness)
-        x = x - tw // 2
-        y = y + th // 2
-    cv.putText(img, text, (int(x), int(y)), font, scale, color, thickness, cv.LINE_AA)
+# ───────────────────────────────────────────────
+#  PIL 기반 유니코드/이모지 텍스트 렌더러
+# ───────────────────────────────────────────────
 
+# 폰트 경로 (macOS 기본 경로)
+_FONT_KO   = "/System/Library/Fonts/AppleSDGothicNeo.ttc"          # 한글+영문
+_FONT_EMOJI = "/System/Library/Fonts/Apple Color Emoji.ttc"        # 이모지
+
+
+def _load_font(size: int, emoji: bool = False):
+    """PIL 폰트 로드 (실패 시 기본 폰트 반환)."""
+    try:
+        path = _FONT_EMOJI if emoji else _FONT_KO
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _pil_put_text(img_bgr: np.ndarray, text: str,
+                  x: int, y: int,
+                  color_bgr: tuple,
+                  font_size: int = 14,
+                  center: bool = False):
+    """
+    PIL로 유니코드/이모지 문자열을 img_bgr(numpy BGR) 위에 그린다.
+    이모지 문자가 포함된 경우 이모지 폰트로 먼저 그리고,
+    나머지 한글/영문은 한글 폰트로 겹쳐 그린다.
+
+    x, y  : 텍스트 좌측 상단 (center=True 이면 가로 중앙 정렬 기준 x)
+    """
+    # BGR → RGB PIL Image
+    pil_img = Image.fromarray(cv.cvtColor(img_bgr, cv.COLOR_BGR2RGB))
+    draw    = ImageDraw.Draw(pil_img)
+
+    font_ko    = _load_font(font_size, emoji=False)
+    font_emoji = _load_font(font_size, emoji=True)
+
+    # 텍스트 크기 측정 (한글 폰트 기준)
+    bbox = font_ko.getbbox(text)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+
+    draw_x = (x - tw // 2) if center else x
+    draw_y = y
+
+    # PIL color: RGB tuple
+    r, g, b = color_bgr[2], color_bgr[1], color_bgr[0]
+
+    # 이모지 문자는 이모지 폰트로, 나머지는 한글 폰트로
+    # → 간단하게: 한글 폰트로 전체 그리기 (이모지는 ?)
+    #             + 이모지 문자만 이모지 폰트로 덮어 그리기
+    draw.text((draw_x, draw_y), text, font=font_ko, fill=(r, g, b))
+
+    # 이모지가 있으면 위치를 직접 계산해서 이모지 폰트로 덮어쓰기
+    cur_x = draw_x
+    for ch in text:
+        cp = ord(ch)
+        is_emoji = (
+            0x1F000 <= cp <= 0x1FFFF or   # 이모지 메인 블록
+            0x2600  <= cp <= 0x27BF  or   # 기타 기호
+            0x2300  <= cp <= 0x23FF  or   # 기술 기호
+            cp in (0x261D, 0x270C, 0x270B, 0x1F44A, 0x1F91D)
+        )
+        ch_bbox = font_ko.getbbox(ch)
+        ch_w = ch_bbox[2] - ch_bbox[0]
+        if is_emoji:
+            draw.text((cur_x, draw_y), ch, font=font_emoji, fill=(r, g, b))
+        cur_x += ch_w
+
+    # RGB PIL → BGR numpy
+    result = cv.cvtColor(np.array(pil_img), cv.COLOR_RGB2BGR)
+    np.copyto(img_bgr, result)
+
+
+def _draw_panel_text(img, text, x, y, color, scale=0.5, thickness=1, center=False):
+    """
+    패널 텍스트 헬퍼.
+    한글/이모지가 포함된 경우 PIL 렌더러로 위임,
+    ASCII 전용이면 OpenCV putText 사용.
+    """
+    # 한글 또는 이모지 코드포인트가 있으면 PIL 사용
+    needs_pil = any(ord(c) > 127 for c in text)
+    if needs_pil:
+        # scale 0.5 → 약 14px, 0.7 → 약 18px 로 매핑
+        font_size = max(10, int(scale * 28))
+        _pil_put_text(img, text, int(x), int(y), color,
+                      font_size=font_size, center=center)
+    else:
+        font = cv.FONT_HERSHEY_SIMPLEX
+        if center:
+            (tw, th), _ = cv.getTextSize(text, font, scale, thickness)
+            x = x - tw // 2
+            y = y + th // 2
+        cv.putText(img, text, (int(x), int(y)), font, scale,
+                   color, thickness, cv.LINE_AA)
