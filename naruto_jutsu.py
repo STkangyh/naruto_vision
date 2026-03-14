@@ -77,6 +77,36 @@ def detect_katon_two_hands(lm_list_all: list) -> bool:
     return all(_only_index_middle_up(lm) for lm in lm_list_all)
 
 
+def detect_chidori_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
+    """
+    CHIDORI 차징 제스처: 양손을 위아래로 겹친 상태.
+    - 두 손이 감지되어야 함
+    - 두 손 손목의 x 좌표가 가까워야 함 (좌우로 많이 벌어지지 않음)
+    - 두 손 손목의 y 좌표 차이가 일정 범위 내여야 함 (위아래로 겹침)
+    - 오른손 손목 좌표 반환 (이펙트 중심용)
+
+    반환값: (감지됨, 오른손_wrist_normalized_xy)
+    """
+    if len(lm_list_all) < 2:
+        return False, None
+
+    wrists = [lm[WRIST] for lm in lm_list_all]
+
+    # x 차이: 좌우로 너무 벌어지면 ×  (화면 너비 기준 0.25 이하)
+    x_diff = abs(wrists[0].x - wrists[1].x)
+    if x_diff > 0.25:
+        return False, None
+
+    # y 차이: 위아래로 겹쳐야 함 (화면 높이 기준 0.08~0.45 범위)
+    y_diff = abs(wrists[0].y - wrists[1].y)
+    if not (0.06 < y_diff < 0.45):
+        return False, None
+
+    # 오른손 = y가 더 낮은 손 (화면에서 아래쪽 = y 값이 큰 손)
+    right_wrist = max(wrists, key=lambda lm: lm.y)
+    return True, (right_wrist.x, right_wrist.y)
+
+
 def count_fingers(lm):
     """펴진 손가락 수 반환 (엄지 제외 4개 + 엄지 1개)."""
     count = 0
@@ -113,21 +143,9 @@ def detect_gesture(lm):
     if n_up == 5 and _palm_facing_up(lm):
         return "RASENGAN"
 
-    # ── 차크라 집중: 엄지+검지만 핀 (총기 모양) ──────────
-    if thumb_up and index_up and not middle_up and not ring_up and not pinky_up:
-        return "CHAKRA_FOCUS"
-
     # ── 카게부신: 검지+중지 (V사인), 나머지 접힘 ──────────
     if not thumb_up and index_up and middle_up and not ring_up and not pinky_up:
         return "KAGE_BUNSHIN"
-
-    # ── 뇨이보: 검지만 핌 ─────────────────────────────────
-    if not thumb_up and index_up and not middle_up and not ring_up and not pinky_up:
-        return "RAIKIRI"
-
-    # ── 풍둔: 엄지+새끼 (shaka) ──────────────────────────
-    if thumb_up and not index_up and not middle_up and not ring_up and pinky_up:
-        return "FUTON"
 
     return None
 
@@ -202,12 +220,10 @@ class JutsuEffect:
     """
 
     JUTSU_INFO = {
-        "RASENGAN":      {"name": "螺旋丸  RASENGAN",      "color": (0, 191, 255),   "icon": "🌀"},
-        "KAGE_BUNSHIN":  {"name": "影分身  KAGE BUNSHIN",  "color": (255, 255,   0), "icon": "✌️"},
-        "KATON":         {"name": "火遁・豪火球  KATON",   "color": (0,  80, 255),   "icon": "🔥"},
-        "RAIKIRI":       {"name": "雷切  RAIKIRI",         "color": (255, 255, 100), "icon": "⚡"},
-        "FUTON":         {"name": "風遁・螺旋手裏剣  FUTON","color": (144, 238, 144), "icon": "🌪️"},
-        "CHAKRA_FOCUS":  {"name": "チャクラ集中  CHAKRA",  "color": (138,  43, 226), "icon": "👆"},
+        "RASENGAN":      {"name": "螺旋丸  RASENGAN",      "color": (0,   100, 255),  "icon": "🌀"},
+        "KAGE_BUNSHIN":  {"name": "影分身  KAGE BUNSHIN",  "color": (255, 255,   0),  "icon": "✌️"},
+        "KATON":         {"name": "火遁・豪火球  KATON",   "color": (0,   80, 255),   "icon": "🔥"},
+        "CHIDORI":       {"name": "千鳥  CHIDORI",         "color": (255, 230,  80),  "icon": "⚡"},
     }
 
     def __init__(self):
@@ -358,9 +374,18 @@ class JutsuEffect:
             for _ in range(4):
                 smoke = (200, 200, 200)
                 self.particles.append(Particle(cx, cy, smoke, speed=3, size=10, lifetime=35))
-        elif jutsu == "CHAKRA_FOCUS":
-            for _ in range(3):
-                self.particles.append(Particle(cx, cy, color, speed=4, size=5, lifetime=28))
+        elif jutsu == "CHIDORI":
+            # 번개 불꽃 파티클: 진한 파란색 계열, 빠르게 튐
+            for _ in range(10):
+                ec = (np.random.randint(20, 80),   # R 낮음 → 파란 강조
+                      np.random.randint(100, 200),  # G 중간
+                      255)                          # B 최대
+                self.particles.append(
+                    Particle(cx, cy, ec,
+                             size=np.random.uniform(2, 5),
+                             lifetime=np.random.randint(8, 18),
+                             speed=np.random.uniform(6, 14),
+                             gravity=-0.05, shrink=0.2, kind="ember"))
 
     # ── 기술별 메인 이펙트 ─────────────────────────────
 
@@ -376,20 +401,16 @@ class JutsuEffect:
         elif jutsu == "KATON":
             self._draw_katon(frame, cx, cy, t)
 
-        elif jutsu == "RAIKIRI":
-            self._draw_raikiri(frame, cx, cy, t)
-
-        elif jutsu == "FUTON":
-            self._draw_futon(frame, cx, cy, bgr, angle)
-
         elif jutsu == "KAGE_BUNSHIN":
             self._draw_kage_bunshin(frame, cx, cy, bgr, t)
 
-        elif jutsu == "CHAKRA_FOCUS":
-            self._draw_chakra_focus(frame, cx, cy, bgr, t)
+        elif jutsu == "CHIDORI":
+            self._draw_chidori(frame, cx, cy, t)
 
     # ─── 라센간 ─────────────────────────────────────────
     def _draw_rasengan(self, frame, cx, cy, bgr, angle, t):
+        # 파란색 계열로 고정 (BGR: B=255, G=80, R=0)
+        bgr = (255, 80, 0)
         # 유지 시간에 따라 코어 반지름 성장 (최대 120px)
         core_r  = int(min(18 + t * 0.6, 120))
         # 궤도 링도 코어에 맞춰 함께 커짐
@@ -549,45 +570,13 @@ class JutsuEffect:
                 noise = np.random.randint(160, 220, frame.shape, dtype=np.uint8)
                 cv.addWeighted(noise, noise_alpha, frame, 1 - noise_alpha, 0, frame)
 
-    # ─── 뇌절 ────────────────────────────────────────────
-    def _draw_raikiri(self, frame, cx, cy, t):
-        overlay = frame.copy()
-        # 번개 방사형
-        np.random.seed(t % 30)
-        for _ in range(10):
-            angle = np.random.uniform(0, 2 * math.pi)
-            length = np.random.randint(40, 90)
-            segs   = 5
-            prev_x, prev_y = cx, cy
-            for s in range(segs):
-                ratio = (s + 1) / segs
-                base_x = cx + int(length * ratio * math.cos(angle))
-                base_y = cy + int(length * ratio * math.sin(angle))
-                jitter_x = base_x + np.random.randint(-8, 8)
-                jitter_y = base_y + np.random.randint(-8, 8)
-                cv.line(overlay, (prev_x, prev_y), (jitter_x, jitter_y),
-                        (255, 255, 200), 2)
-                prev_x, prev_y = jitter_x, jitter_y
-        cv.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-        # 코어
-        cv.circle(frame, (cx, cy), 14, (200, 220, 255), -1)
-
-    # ─── 풍둔 ────────────────────────────────────────────
-    def _draw_futon(self, frame, cx, cy, bgr, angle):
-        overlay = frame.copy()
-        # 회전하는 나선형 링들
-        for ring in range(3):
-            r = 35 + ring * 20
-            for i in range(16):
-                a  = math.radians(angle * (1 + ring * 0.3) + i * 22.5)
-                px = int(cx + r * math.cos(a))
-                py = int(cy + r * math.sin(a))
-                cv.circle(overlay, (px, py), 3, bgr, -1)
-        cv.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-        cv.circle(frame, (cx, cy), 16, bgr, -1)
+    # ─── 뇨이보 ──────────────────────────────────────────
+    # (removed)
 
     # ─── 카게부신 ─────────────────────────────────────────
     def _draw_kage_bunshin(self, frame, cx, cy, bgr, t):
+        # 파란색 계열로 고정 (BGR: B=255, G=100, R=0)
+        bgr = (255, 100, 0)
         h, w = frame.shape[:2]
 
         # ── 3초(90프레임) 이상 유지 시 분신 2개 등장 ─────
@@ -647,22 +636,67 @@ class JutsuEffect:
             cv.rectangle(frame, (bx0, by0), (bx0 + filled, by0 + bar_h),
                          bgr, -1)
 
-    # ─── 차크라 집중 ──────────────────────────────────────
-    def _draw_chakra_focus(self, frame, cx, cy, bgr, t):
+    # ─── 치도리 ──────────────────────────────────────────
+    def _draw_chidori(self, frame, cx, cy, t):
+        """천마리 새 울음소리: 검지 끝에서 번개가 격렬하게 튀는 효과."""
+        h, w = frame.shape[:2]
+
+        # ── 글로우 코어 ───────────────────────────────────
+        glow_r = int(22 + 8 * abs(math.sin(t * 0.4)))
+        glow_ov = frame.copy()
+        cv.circle(glow_ov, (cx, cy), glow_r + 18, (255, 120, 0), -1)
+        cv.addWeighted(glow_ov, 0.30, frame, 0.70, 0, frame)
+
+        # ── 번개 줄기: 중심에서 사방으로 삐죽삐죽 ────────
+        np.random.seed(t % 20)                  # 매 프레임 다른 시드 → 깜빡임
+        NUM_BOLTS   = 18
+        BOLT_LEN    = int(55 + 30 * abs(math.sin(t * 0.25)))
+        SEGS        = 6
+
         overlay = frame.copy()
-        pulse = int(10 * abs(math.sin(t * 0.1)))
-        # 바깥 아우라 링
-        for r in range(50 + pulse, 20, -12):
-            cv.circle(overlay, (cx, cy), r, bgr, 1)
-        cv.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-        # 육각형 모양
-        for i in range(6):
-            a1 = math.radians(t * 2 + i * 60)
-            a2 = math.radians(t * 2 + (i + 1) * 60)
-            p1 = (int(cx + 35 * math.cos(a1)), int(cy + 35 * math.sin(a1)))
-            p2 = (int(cx + 35 * math.cos(a2)), int(cy + 35 * math.sin(a2)))
-            cv.line(frame, p1, p2, bgr, 2)
-        cv.circle(frame, (cx, cy), 12, bgr, -1)
+        for b in range(NUM_BOLTS):
+            base_angle = (2 * math.pi / NUM_BOLTS) * b + t * 0.08
+            base_angle += np.random.uniform(-0.25, 0.25)
+            spd = np.random.uniform(0.7, 1.3)
+            px, py = cx, cy
+            for s in range(SEGS):
+                ratio = (s + 1) / SEGS
+                bx_ = cx + int(BOLT_LEN * spd * ratio * math.cos(base_angle))
+                by_ = cy + int(BOLT_LEN * spd * ratio * math.sin(base_angle))
+                jx  = bx_ + np.random.randint(-10, 10)
+                jy  = by_ + np.random.randint(-10, 10)
+                # 바깥으로 갈수록 얇고 어두워짐
+                thickness = max(1, 3 - s // 2)
+                bright = 255 - s * 25
+                cv.line(overlay, (px, py), (jx, jy),
+                        (bright, bright // 2, 0), thickness, cv.LINE_AA)
+                px, py = jx, jy
+
+        # ── 보조 짧은 스파크 ──────────────────────────────
+        for _ in range(12):
+            ang = np.random.uniform(0, 2 * math.pi)
+            r1  = np.random.randint(glow_r, glow_r + 35)
+            r2  = r1 + np.random.randint(8, 22)
+            jx1 = cx + int(r1 * math.cos(ang)) + np.random.randint(-5, 5)
+            jy1 = cy + int(r1 * math.sin(ang)) + np.random.randint(-5, 5)
+            jx2 = cx + int(r2 * math.cos(ang)) + np.random.randint(-8, 8)
+            jy2 = cy + int(r2 * math.sin(ang)) + np.random.randint(-8, 8)
+            cv.line(overlay, (jx1, jy1), (jx2, jy2),
+                    (180, 200, 255), 1, cv.LINE_AA)
+
+        cv.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+        # ── 화면 전체 번쩍임 (주기적) ─────────────────────
+        if t % 8 < 2:
+            flash_ov = frame.copy()
+            flash_ov[:] = (255, 100, 0)
+            cv.addWeighted(flash_ov, 0.12, frame, 0.88, 0, frame)
+
+        # ── 중심 코어 원 ──────────────────────────────────
+        cv.circle(frame, (cx, cy), glow_r,      (255, 220, 180), -1)
+        cv.circle(frame, (cx, cy), glow_r - 5,  (255, 160,  80), -1)
+        cv.circle(frame, (cx, cy), glow_r - 12, (255,  80,   0), -1)
+        cv.circle(frame, (cx, cy), 6,            (255, 255, 255), -1)
 
     # ── HUD (프레임 내부 – 비활성화, 패널로 이전) ────────
     def _draw_hud(self, frame, info):
@@ -679,7 +713,8 @@ class NarutoJutsuRecognizer:
     VideoRecorder 의 메인 루프에서 process_frame() 을 호출하여 사용.
     """
 
-    GESTURE_HOLD_FRAMES = 8   # 몇 프레임 연속으로 같은 제스처여야 활성화할지
+    GESTURE_HOLD_FRAMES  = 8    # 몇 프레임 연속으로 같은 제스처여야 활성화할지
+    CHIDORI_CHARGE_FRAMES = 45  # 치도리 차징 필요 프레임 (1.5초 @ 30fps)
     # 모델 파일 경로 (같은 폴더에 있다고 가정)
     MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
 
@@ -693,6 +728,11 @@ class NarutoJutsuRecognizer:
         # 최신 감지 결과 저장소 (VIDEO 모드 콜백용)
         self._latest_result = None
         self._frame_timestamp_ms = 0
+
+        # CHIDORI 전용 차징 상태
+        self._chidori_charge  = 0      # 양손 겹침 유지 프레임 수
+        self._chidori_armed   = False  # 차징 완료 → 이펙트 발동 가능
+        self._chidori_right   = None   # 오른손 손목 정규화 좌표 (x, y)
 
         self._hand_landmarker = None
         self._draw_utils  = drawing_utils
@@ -736,6 +776,9 @@ class NarutoJutsuRecognizer:
             self._current_gesture = None
             self._gesture_buffer.clear()
             self._latest_result = None
+            self._chidori_charge = 0
+            self._chidori_armed  = False
+            self._chidori_right  = None
         print(f"나루토 모드: {'ON' if self.enabled else 'OFF'}")
 
     def process_frame(self, frame):
@@ -774,40 +817,72 @@ class NarutoJutsuRecognizer:
                     self._draw_styles.get_default_hand_connections_style(),
                 )
 
+            # ── CHIDORI: 양손 위아래 겹침 → 1.5초 차징 후 발동 ──
+            chidori_detected, right_xy = detect_chidori_two_hands(all_lm)
+            if chidori_detected:
+                self._chidori_charge += 1
+                if right_xy:
+                    self._chidori_right = right_xy
+                if self._chidori_charge >= self.CHIDORI_CHARGE_FRAMES:
+                    self._chidori_armed = True
+            else:
+                self._chidori_charge = 0
+                # 이펙트가 활성화 중이 아닐 때만 armed 해제
+                if self._current_gesture != "CHIDORI":
+                    self._chidori_armed = False
+
+            # 차징 게이지 오버레이 (차징 중이고 아직 발동 안 됨)
+            if self._chidori_charge > 0 and not self._chidori_armed:
+                self._draw_chidori_charge_gauge(frame, self._chidori_charge)
+
+            # 차징 완료 → CHIDORI 이펙트 발동 (오른손 손목 위치)
+            if self._chidori_armed:
+                gesture = "CHIDORI"
+                if self._chidori_right:
+                    palm_center = (
+                        int(self._chidori_right[0] * w),
+                        int(self._chidori_right[1] * h),
+                    )
+
             # ── KATON: 양손 모두 검지+중지만 위로 핀 상태 ──
-            if detect_katon_two_hands(all_lm):
+            elif detect_katon_two_hands(all_lm):
                 gesture = "KATON"
-                # 효과 중심: 두 손 중지 끝(MIDDLE_TIP)의 중간점
                 mx = sum(lm[MIDDLE_TIP].x for lm in all_lm) / len(all_lm)
                 my = sum(lm[MIDDLE_TIP].y for lm in all_lm) / len(all_lm)
                 palm_center = (int(mx * w), int(my * h))
+
             else:
-                # ── 단일 손 제스처 (첫 번째로 인식된 손) ───
+                # ── 단일 손 제스처 ───────────────────────────
                 for lm_list in all_lm:
                     wrist = lm_list[WRIST]
                     palm_center = (int(wrist.x * w), int(wrist.y * h))
                     g = detect_gesture(lm_list)
                     if g is not None:
                         gesture = g
-                        # KATON이면 효과 중심을 중지 끝(MIDDLE_TIP)으로
-                        if g == "KATON":
-                            palm_center = (
-                                int(lm_list[MIDDLE_TIP].x * w),
-                                int(lm_list[MIDDLE_TIP].y * h),
-                            )
                         break
+        else:
+            # 손이 사라지면 CHIDORI 차징 리셋 (이펙트 발동 중이면 유지)
+            if self._current_gesture != "CHIDORI":
+                self._chidori_charge = 0
+                self._chidori_armed  = False
 
-        # 안정적 제스처 인식 (버퍼링)
-        self._gesture_buffer.append(gesture)
-        if len(self._gesture_buffer) > self.GESTURE_HOLD_FRAMES:
-            self._gesture_buffer.pop(0)
-
-        stable = self._stable_gesture()
+        # 안정적 제스처 인식 (버퍼링) — CHIDORI는 버퍼 우선순위 최상위
+        if gesture != "CHIDORI":
+            self._gesture_buffer.append(gesture)
+            if len(self._gesture_buffer) > self.GESTURE_HOLD_FRAMES:
+                self._gesture_buffer.pop(0)
+            stable = self._stable_gesture()
+        else:
+            stable = "CHIDORI"
+            self._gesture_buffer.clear()
 
         if stable:
             self.effect.activate(stable, palm_center)
         else:
             self.effect.deactivate()
+            # CHIDORI 이펙트가 종료되면 armed 해제
+            if self._current_gesture == "CHIDORI":
+                self._chidori_armed = False
 
         self._current_gesture = stable
 
@@ -820,6 +895,27 @@ class NarutoJutsuRecognizer:
         return frame
 
     # ── 내부 헬퍼 ──────────────────────────────────────
+
+    def _draw_chidori_charge_gauge(self, frame, charge):
+        """치도리 차징 게이지를 화면 하단에 표시."""
+        h, w = frame.shape[:2]
+        progress = min(charge / self.CHIDORI_CHARGE_FRAMES, 1.0)
+        bar_w    = 200
+        bar_h    = 10
+        x0 = (w - bar_w) // 2
+        y0 = h - 30
+        # 배경
+        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (40, 40, 40), -1)
+        # 채워진 부분 (번개 흰청색)
+        filled = int(bar_w * progress)
+        cv.rectangle(frame, (x0, y0), (x0 + filled, y0 + bar_h), (255, 240, 180), -1)
+        # 테두리
+        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (180, 210, 255), 1)
+        # 텍스트
+        cv.putText(frame, "CHIDORI CHARGING...",
+                   (x0 - 10, y0 - 8),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.48,
+                   (180, 220, 255), 1, cv.LINE_AA)
 
     def _stable_gesture(self):
         """버퍼 안에서 다수결로 안정된 제스처를 반환."""
@@ -863,9 +959,7 @@ JUTSU_PANEL_INFO = [
     ("RASENGAN",     "손 활짝 + 손바닥 위",   "RASENGAN",     (255, 160,  50)),
     ("KAGE_BUNSHIN", "검지 + 중지 (V)",        "KAGE BUNSHIN", (200, 200, 255)),
     ("KATON",        "[양손] 검지+중지 위로",   "KATON",        ( 50,  80, 255)),
-    ("RAIKIRI",      "검지만",                 "RAIKIRI",      (100, 220, 255)),
-    ("FUTON",        "엄지 + 새끼",            "FUTON",        (100, 220, 100)),
-    ("CHAKRA_FOCUS", "엄지 + 검지",            "CHAKRA FOCUS", (200,  80, 200)),
+    ("CHIDORI",      "[양손] 위아래 겹침 1.5초",  "CHIDORI",      (180, 220, 255)),
 ]
 
 
@@ -947,7 +1041,7 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
     # ════════════════════════════════════════════════════
     #  우측: 6가지 제스처 카드 (2열 × 3행)
     # ════════════════════════════════════════════════════
-    COLS, ROWS = 3, 2
+    COLS, ROWS = 2, 2
     card_w = RIGHT_W // COLS
     card_h = panel_h // ROWS
     pad = 6
