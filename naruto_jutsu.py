@@ -109,41 +109,53 @@ def detect_chidori_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
 
 def detect_sennin_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
     """
-    선인모드 제스처: 양손 합장 (손을 맞대는 자세).
-    - 두 손이 감지되어야 함
-    - 두 손 손목의 x 좌표가 매우 가까워야 함 (합장)
-    - 두 손 손목의 y 좌표도 비슷해야 함 (같은 높이)
-    - 두 손 모두 손가락이 위로 펴진 상태 (합장은 손가락을 위로)
+    선인모드 제스처: 양손의 검지+중지를 십자(十字)로 겹친 상태.
+    - 두 손 모두 검지·중지만 위로 핀 상태 (약지·새끼 접힘)
+    - 두 손의 검지·중지 끝이 서로 교차: 한 손 손가락 끝의 x가
+      다른 손의 검지~중지 x 범위 안에 들어와야 함
+    - 두 손 손목의 y 차이가 있어야 함 (위아래로 엇갈려 겹침)
 
     반환값: (감지됨, 중심_normalized_xy)
     """
     if len(lm_list_all) < 2:
         return False, None
 
-    wrists  = [lm[WRIST]      for lm in lm_list_all]
-    middles = [lm[MIDDLE_TIP] for lm in lm_list_all]
+    lm0, lm1 = lm_list_all[0], lm_list_all[1]
 
-    # x 차이: 매우 가까워야 함 (화면 너비 기준 0.18 이하)
-    x_diff = abs(wrists[0].x - wrists[1].x)
-    if x_diff > 0.18:
+    # 두 손 모두 검지+중지만 위로, 약지·새끼 접힘 (엄지 무관)
+    if not _only_index_middle_up(lm0) or not _only_index_middle_up(lm1):
         return False, None
 
-    # y 차이: 같은 높이여야 함 (화면 높이 기준 0.12 이하)
-    y_diff = abs(wrists[0].y - wrists[1].y)
-    if y_diff > 0.12:
+    # 각 손의 검지·중지 끝 x 좌표
+    i0x = lm0[INDEX_TIP].x
+    m0x = lm0[MIDDLE_TIP].x
+    i1x = lm1[INDEX_TIP].x
+    m1x = lm1[MIDDLE_TIP].x
+
+    # 각 손의 검지·중지 x 범위 (min ~ max)
+    lo0, hi0 = min(i0x, m0x), max(i0x, m0x)
+    lo1, hi1 = min(i1x, m1x), max(i1x, m1x)
+
+    # 두 손 손가락 끝의 x 범위가 겹쳐야 함 (십자 겹침의 핵심 조건)
+    overlap_x = min(hi0, hi1) - max(lo0, lo1)
+    if overlap_x < -0.06:   # 약간의 오차 허용
         return False, None
 
-    # 두 손 모두 검지·중지·약지·새끼 위로 (합장 자세)
-    for lm in lm_list_all:
-        if not (_tip_above_mcp(lm, INDEX_TIP,  INDEX_MCP) and
-                _tip_above_mcp(lm, MIDDLE_TIP, MIDDLE_MCP) and
-                _tip_above_mcp(lm, RING_TIP,   RING_MCP)):
-            return False, None
+    # 두 손 중심 x가 가까워야 함 (화면 너비 기준 0.22 이하)
+    cx0 = (i0x + m0x) / 2
+    cx1 = (i1x + m1x) / 2
+    if abs(cx0 - cx1) > 0.22:
+        return False, None
 
-    # 중심 좌표 (두 손목 평균)
-    cx = (wrists[0].x + wrists[1].x) / 2
-    cy = (wrists[0].y + wrists[1].y) / 2
-    return True, (cx, cy)
+    # 두 손 손목 y 차이: 위아래로 엇갈려야 함 (0.04 ~ 0.40)
+    y_diff = abs(lm0[WRIST].y - lm1[WRIST].y)
+    if not (0.04 < y_diff < 0.40):
+        return False, None
+
+    # 중심 좌표
+    wx = (lm0[WRIST].x + lm1[WRIST].x) / 2
+    wy = (lm0[WRIST].y + lm1[WRIST].y) / 2
+    return True, (wx, wy)
 
 
 def count_fingers(lm):
@@ -1278,7 +1290,7 @@ JUTSU_PANEL_INFO = [
     ("KAGE_BUNSHIN", "검지 + 중지 (V)",           "KAGE BUNSHIN", (200, 200, 255)),
     ("KATON",        "[양손] 검지+중지 위로",      "KATON",        ( 50,  80, 255)),
     ("CHIDORI",      "[양손] 위아래 겹침 1.5초",   "CHIDORI",      (180, 220, 255)),
-    ("SENNIN_MODE",  "[양손] 합장 1초",            "SENNIN MODE",  ( 80, 220,  80)),
+    ("SENNIN_MODE",  "[양손] 검지+중지 십자 1초",  "SENNIN MODE",  ( 80, 220,  80)),
     ("CHAKRA_MODE",  "엄지+새끼 핌",               "CHAKRA MODE",  (200,  80, 255)),
 ]
 

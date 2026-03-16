@@ -153,7 +153,7 @@ class VideoRecorder:
         print("  ✌️  검지+중지             → 影 카게부신 (KAGE BUNSHIN)")
         print("  🤲 [양손] 검지+중지 위로  → 🔥 화둔·호화구 (KATON)")
         print("  🤝 [양손] 위아래 겹침 1.5초→ ⚡ 치도리 (CHIDORI)")
-        print("  🙏 [양손] 합장 1초        → 🐸 선인모드 (SENNIN MODE)")
+        print("  🙏 [양손] 검지+중지 십자 1초  → 🐸 선인모드 (SENNIN MODE)")
         print("  🤙 엄지+새끼 핌           → 💜 차크라모드 (CHAKRA MODE)")
         print()
         print("카메라 창이 열립니다. 카메라 창을 클릭하여 활성화하세요.")
