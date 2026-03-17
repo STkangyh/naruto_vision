@@ -106,38 +106,6 @@ naruto_vision/
 
 ---
 
-## 🔧 기술 세부사항
-
-### 기술 스택
-
-| 항목          | 내용                                                   |
-| ------------- | ------------------------------------------------------ |
-| 언어          | Python 3.10+                                           |
-| 영상 처리     | OpenCV 4.x                                             |
-| 손 인식       | MediaPipe 0.10 (Tasks API, LIVE_STREAM)                |
-| 텍스트 렌더링 | Pillow (한글 지원, Windows/macOS/Linux 폰트 자동 탐색) |
-| 수치 연산     | NumPy                                                  |
-
-### 클래스 구조
-
-#### `VideoRecorder` (`video_recorder.py`)
-
-- `initialize_camera()`: 카메라 초기화
-- `start_recording()` / `stop_recording()`: 녹화 제어
-- `run()`: 메인 루프 (손 인식 → 이펙트 → 녹화)
-
-#### `NarutoJutsuRecognizer` (`naruto_jutsu.py`)
-
-- `process_frame(frame)`: 손 감지 → 제스처 인식 → 이펙트 렌더링
-- `toggle()`: 나루토 모드 ON/OFF
-- `detect_chidori_two_hands()`: 양손 겹침 감지 (CHIDORI 전용)
-- `detect_mokuton_two_hands()`: 양손 손가락 위로 모음 감지 (MOKUTON_SENJU 전용)
-
-#### `JutsuEffect` (`naruto_jutsu.py`)
-
-- 5가지 기술별 애니메이션 이펙트 렌더링
-- `Particle` 파티클 시스템으로 불꽃·번개·연기·나선·나뭇잎 효과 구현
-
 ### 주요 설정 값
 
 - 해상도: 640×480 (패널 포함 시 640×660)
