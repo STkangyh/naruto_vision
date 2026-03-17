@@ -13,7 +13,7 @@ from mediapipe.tasks.python.vision import (
     HandLandmarksConnections,
     RunningMode,
 )
-from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
+
 
 
 # ───────────────────────────────────────────────
@@ -107,13 +107,12 @@ def detect_chidori_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
     return True, (right_wrist.x, right_wrist.y)
 
 
-def detect_sennin_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
+def detect_mokuton_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
     """
-    선인모드 제스처: 양손의 검지+중지를 십자(十字)로 겹친 상태.
-    - 두 손 모두 검지·중지만 위로 핀 상태 (약지·새끼 접힘)
-    - 두 손의 검지·중지 끝이 서로 교차: 한 손 손가락 끝의 x가
-      다른 손의 검지~중지 x 범위 안에 들어와야 함
-    - 두 손 손목의 y 차이가 있어야 함 (위아래로 엇갈려 겹침)
+    목둔·진수천수 제스처: 양손을 손가락이 위로 향하도록 모아서 붙인 상태.
+    - 두 손 모두 검지·중지·약지·새끼 4개 손가락이 위로 핌
+    - 두 손 손목의 x 좌표가 가까워야 함 (모아진 상태, 0.22 이하)
+    - 두 손 손목의 y 좌표가 비슷해야 함 (같은 높이, 0.15 이하)
 
     반환값: (감지됨, 중심_normalized_xy)
     """
@@ -122,34 +121,21 @@ def detect_sennin_two_hands(lm_list_all: list) -> tuple[bool, tuple | None]:
 
     lm0, lm1 = lm_list_all[0], lm_list_all[1]
 
-    # 두 손 모두 검지+중지만 위로, 약지·새끼 접힘 (엄지 무관)
-    if not _only_index_middle_up(lm0) or not _only_index_middle_up(lm1):
+    # 두 손 모두 검지·중지·약지·새끼 4개 손가락이 위로 핌
+    for lm in [lm0, lm1]:
+        for tip, mcp in [(INDEX_TIP, INDEX_MCP), (MIDDLE_TIP, MIDDLE_MCP),
+                         (RING_TIP, RING_MCP), (PINKY_TIP, PINKY_MCP)]:
+            if not _tip_above_mcp(lm, tip, mcp):
+                return False, None
+
+    # 두 손 손목 x 차이: 가까워야 함 (모아진 상태, 0.22 이하)
+    x_diff = abs(lm0[WRIST].x - lm1[WRIST].x)
+    if x_diff > 0.22:
         return False, None
 
-    # 각 손의 검지·중지 끝 x 좌표
-    i0x = lm0[INDEX_TIP].x
-    m0x = lm0[MIDDLE_TIP].x
-    i1x = lm1[INDEX_TIP].x
-    m1x = lm1[MIDDLE_TIP].x
-
-    # 각 손의 검지·중지 x 범위 (min ~ max)
-    lo0, hi0 = min(i0x, m0x), max(i0x, m0x)
-    lo1, hi1 = min(i1x, m1x), max(i1x, m1x)
-
-    # 두 손 손가락 끝의 x 범위가 겹쳐야 함 (십자 겹침의 핵심 조건)
-    overlap_x = min(hi0, hi1) - max(lo0, lo1)
-    if overlap_x < -0.06:   # 약간의 오차 허용
-        return False, None
-
-    # 두 손 중심 x가 가까워야 함 (화면 너비 기준 0.22 이하)
-    cx0 = (i0x + m0x) / 2
-    cx1 = (i1x + m1x) / 2
-    if abs(cx0 - cx1) > 0.22:
-        return False, None
-
-    # 두 손 손목 y 차이: 위아래로 엇갈려야 함 (0.04 ~ 0.40)
+    # 두 손 손목 y 차이: 같은 높이 (0.15 이하)
     y_diff = abs(lm0[WRIST].y - lm1[WRIST].y)
-    if not (0.04 < y_diff < 0.40):
+    if y_diff > 0.15:
         return False, None
 
     # 중심 좌표
@@ -197,10 +183,6 @@ def detect_gesture(lm):
     # ── 카게부신: 검지+중지 (V사인), 나머지 접힘 ──────────
     if not thumb_up and index_up and middle_up and not ring_up and not pinky_up:
         return "KAGE_BUNSHIN"
-
-    # ── 차크라모드: 엄지+새끼 핌, 나머지 접힘 (shaka) ────
-    if thumb_up and not index_up and not middle_up and not ring_up and pinky_up:
-        return "CHAKRA_MODE"
 
     return None
 
@@ -275,12 +257,11 @@ class JutsuEffect:
     """
 
     JUTSU_INFO = {
-        "RASENGAN":      {"name": "螺旋丸  RASENGAN",      "color": (0,   100, 255),  "icon": "🌀"},
-        "KAGE_BUNSHIN":  {"name": "影分身  KAGE BUNSHIN",  "color": (255, 255,   0),  "icon": "✌️"},
-        "KATON":         {"name": "火遁・豪火球  KATON",   "color": (0,   80, 255),   "icon": "🔥"},
-        "CHIDORI":       {"name": "千鳥  CHIDORI",         "color": (255, 230,  80),  "icon": "⚡"},
-        "SENNIN_MODE":   {"name": "仙人モード  SENNIN",    "color": (50,  220,  80),  "icon": "🐸"},
-        "CHAKRA_MODE":   {"name": "チャクラモード  CHAKRA", "color": (220, 80,  255),  "icon": "💜"},
+        "RASENGAN":       {"name": "螺旋丸  RASENGAN",      "color": (0,   100, 255),  "icon": "🌀"},
+        "KAGE_BUNSHIN":   {"name": "影分身  KAGE BUNSHIN",  "color": (255, 255,   0),  "icon": "✌️"},
+        "KATON":          {"name": "火遁・豪火球  KATON",   "color": (0,   80, 255),   "icon": "🔥"},
+        "CHIDORI":        {"name": "千鳥  CHIDORI",         "color": (255, 230,  80),  "icon": "⚡"},
+        "MOKUTON_SENJU":  {"name": "木遁・真数千手",        "color": (80,  160,  50),  "icon": "🌿"},
     }
 
     def __init__(self):
@@ -443,54 +424,35 @@ class JutsuEffect:
                              speed=np.random.uniform(6, 14),
                              gravity=-0.05, shrink=0.2, kind="ember"))
 
-        elif jutsu == "SENNIN_MODE":
-            # 자연 에너지: 초록/황금 파티클이 아래에서 위로 떠오름
-            for _ in range(6):
-                r_val = np.random.randint(0, 2)
+        elif jutsu == "MOKUTON_SENJU":
+            # 나무 파편 & 잎사귀 파티클이 위쪽으로 튐
+            for _ in range(7):
+                r_val = np.random.randint(0, 3)
                 if r_val == 0:
-                    # 초록 자연 에너지
-                    sc = (np.random.randint(20, 80),
-                          np.random.randint(180, 255),
-                          np.random.randint(20, 80))
+                    # 나뭇잎 (초록)
+                    wc = (np.random.randint(30, 80),
+                          np.random.randint(130, 200),
+                          np.random.randint(20, 60))
+                elif r_val == 1:
+                    # 나무 파편 (갈색)
+                    wc = (np.random.randint(40, 90),
+                          np.random.randint(80, 130),
+                          np.random.randint(100, 160))
                 else:
-                    # 황금빛 자연 에너지
-                    sc = (np.random.randint(200, 255),
-                          np.random.randint(180, 240),
-                          np.random.randint(0, 60))
-                # 몸 전체에서 나타나도록 위치 랜덤 오프셋
-                ox = np.random.randint(-80, 80)
-                oy = np.random.randint(-120, 80)
+                    # 황토 먼지
+                    wc = (np.random.randint(80, 130),
+                          np.random.randint(140, 190),
+                          np.random.randint(160, 210))
+                # 위쪽 반원 방향으로 튐
+                ang = np.random.uniform(math.pi * 1.1, math.pi * 1.9)
+                spd = np.random.uniform(2, 8)
                 self.particles.append(
-                    Particle(cx + ox, cy + oy, sc,
-                             size=np.random.uniform(3, 8),
-                             lifetime=np.random.randint(30, 60),
-                             speed=np.random.uniform(1, 3),
-                             vx=np.random.uniform(-0.5, 0.5),
-                             vy=np.random.uniform(-2.5, -0.5),  # 위로 떠오름
-                             gravity=-0.02, shrink=0.08))
-
-        elif jutsu == "CHAKRA_MODE":
-            # 차크라 에너지: 보라/흰 파티클이 신체 주변을 맴돌며 튐
-            for _ in range(8):
-                r_val = np.random.randint(0, 2)
-                if r_val == 0:
-                    cc = (np.random.randint(180, 255),
-                          np.random.randint(50, 120),
-                          np.random.randint(200, 255))
-                else:
-                    cc = (np.random.randint(220, 255),
-                          np.random.randint(200, 255),
-                          np.random.randint(220, 255))
-                ang = np.random.uniform(0, 2 * math.pi)
-                r_dist = np.random.uniform(30, 100)
-                ox = math.cos(ang) * r_dist
-                oy = math.sin(ang) * r_dist
-                self.particles.append(
-                    Particle(cx + ox, cy + oy, cc,
-                             size=np.random.uniform(2, 6),
-                             lifetime=np.random.randint(15, 35),
-                             speed=np.random.uniform(1, 4),
-                             gravity=0.0, shrink=0.1))
+                    Particle(cx, cy, wc,
+                             size=np.random.uniform(2, 7),
+                             lifetime=np.random.randint(25, 55),
+                             vx=math.cos(ang) * spd,
+                             vy=math.sin(ang) * spd,
+                             gravity=0.10, shrink=0.06))
 
     # ── 기술별 메인 이펙트 ─────────────────────────────
 
@@ -512,11 +474,8 @@ class JutsuEffect:
         elif jutsu == "CHIDORI":
             self._draw_chidori(frame, cx, cy, t)
 
-        elif jutsu == "SENNIN_MODE":
-            self._draw_sennin_mode(frame, cx, cy, t)
-
-        elif jutsu == "CHAKRA_MODE":
-            self._draw_chakra_mode(frame, cx, cy, t)
+        elif jutsu == "MOKUTON_SENJU":
+            self._draw_mokuton_senju(frame, cx, cy, t)
 
     # ─── 라센간 ─────────────────────────────────────────
     def _draw_rasengan(self, frame, cx, cy, bgr, angle, t):
@@ -809,161 +768,100 @@ class JutsuEffect:
         cv.circle(frame, (cx, cy), glow_r - 12, (255,  80,   0), -1)
         cv.circle(frame, (cx, cy), 6,            (255, 255, 255), -1)
 
-    # ─── 선인모드 ─────────────────────────────────────────
-    def _draw_sennin_mode(self, frame, cx, cy, t):
-        """仙人モード: 자연 에너지가 전신을 감싸는 초록/황금 오라."""
+    # ─── 목둔 진수천수 ──────────────────────────────────────
+    def _draw_mokuton_senju(self, frame, cx, cy, t):
+        """木遁·真数千手: 사용자 뒤쪽에서 거대한 나무 팔들이 반원을 그리며 솟아오름."""
         h, w = frame.shape[:2]
 
-        # ── 전신 오라 (화면 가장자리에서 중심으로 흐르는 에너지장) ──
-        # 맥동하는 오라 링 여러 겹
-        pulse = abs(math.sin(t * 0.07))
-        for i, (base_r, alpha_mul) in enumerate([
-            (min(w, h) // 2 + 30,  0.06),
-            (min(w, h) // 2 - 10,  0.10),
-            (min(w, h) // 2 - 50,  0.08),
-        ]):
-            r = base_r + int(15 * math.sin(t * 0.07 + i * 1.2))
-            ov = frame.copy()
-            cv.circle(ov, (w // 2, h // 2), r,
-                      (0, int(200 + 55 * pulse), int(60 + 80 * pulse)), 18)
-            cv.addWeighted(ov, alpha_mul * (0.6 + 0.4 * pulse),
-                           frame, 1 - alpha_mul * (0.6 + 0.4 * pulse), 0, frame)
+        # 나무 팔들의 기점: 화면 하단 중앙 (사용자 몸 뒤쪽)
+        origin_x = w // 2
+        origin_y = h
 
-        # ── 화면 전체 초록빛 틴트 (약하게) ──────────────────
-        tint = frame.copy()
-        tint[:] = (0, 60, 10)
-        cv.addWeighted(tint, 0.08 + 0.04 * pulse, frame, 1 - 0.08 - 0.04 * pulse, 0, frame)
+        NUM_ARMS = 14
+        # 25프레임에 걸쳐 성장
+        grow = min(t / 25.0, 1.0)
+        max_len = int(min(w, h) * 0.82)
+        arm_len = int(max_len * grow)
 
-        # ── 선인 문양: 눈 주위 육각형 표식 ─────────────────
-        # 얼굴 위치를 cx, cy 기준 위쪽으로 추정
-        face_cx = cx
-        face_cy = max(40, cy - 80)
-        for eye_dx in (-28, 28):
-            ex, ey = face_cx + eye_dx, face_cy
-            # 눈 주위 원형 표식
-            mark_r = int(12 + 3 * math.sin(t * 0.12))
-            cv.circle(frame, (ex, ey), mark_r,
-                      (0, int(180 + 75 * pulse), int(40 + 60 * pulse)), 2)
-            # 내부 채움
-            ov = frame.copy()
-            cv.circle(ov, (ex, ey), mark_r - 3,
-                      (0, int(120 + 80 * pulse), int(20 + 40 * pulse)), -1)
-            cv.addWeighted(ov, 0.35, frame, 0.65, 0, frame)
+        if arm_len < 12:
+            return
 
-        # ── 회전하는 자연 에너지 기호 (손 주위) ─────────────
-        spin = t * 3.0
-        SYMBOL_R = 55
-        for i in range(8):
-            a  = math.radians(spin + i * 45)
-            sx = int(cx + SYMBOL_R * math.cos(a))
-            sy = int(cy + SYMBOL_R * math.sin(a))
-            # 초록 점
-            alpha_p = 0.6 + 0.4 * abs(math.sin(t * 0.1 + i * 0.4))
-            dot_r   = max(2, int(4 + 2 * abs(math.sin(t * 0.1 + i))))
-            cv.circle(frame, (sx, sy), dot_r,
-                      (0, int(210 * alpha_p), int(60 * alpha_p)), -1)
+        # 나무 색상 (BGR for OpenCV)
+        WOOD_DARK   = ( 33,  67, 101)   # 어두운 갈색
+        WOOD_MID    = ( 43,  90, 139)   # 중간 갈색
+        WOOD_LIGHT  = ( 63, 133, 190)   # 밝은 갈색
+        BARK_LINE   = ( 22,  45,  68)   # 나무 결
 
-        # ── 손 중심 코어 (황금빛) ─────────────────────────
-        core_r = int(18 + 6 * pulse)
-        ov = frame.copy()
-        cv.circle(ov, (cx, cy), core_r + 12,
-                  (0, int(200 + 55 * pulse), int(80 + 60 * pulse)), -1)
-        cv.addWeighted(ov, 0.25, frame, 0.75, 0, frame)
-        cv.circle(frame, (cx, cy), core_r,
-                  (int(40 * pulse), int(220 + 35 * pulse), int(80 + 80 * pulse)), -1)
-        # 황금 테두리
-        cv.circle(frame, (cx, cy), core_r + 3,
-                  (int(60 * pulse), int(200 + 55 * pulse), int(100 + 100 * pulse)), 2)
-        cv.circle(frame, (cx, cy), 6, (200, 255, 180), -1)
+        overlay = frame.copy()
 
-        # ── 선인모드 텍스트 ─────────────────────────────────
-        label_alpha = 0.7 + 0.3 * pulse
+        # 14개 팔을 반원으로 배치 (-160° ~ -20°, 화면 위쪽 반원)
+        for i in range(NUM_ARMS):
+            # 화면 좌표계: y축이 아래로 → 위를 향하는 반원은 sin이 음수인 구간
+            # -160° ~ -20°: 좌측 비스듬 위 ~ 우측 비스듬 위 (직선 위 -90° 중심)
+            angle_deg = -160.0 + (140.0 / (NUM_ARMS - 1)) * i
+            angle_rad = math.radians(angle_deg)
+
+            # 중앙 팔일수록 굵음, 양끝은 얇음
+            center_dist = abs(i - (NUM_ARMS - 1) / 2.0) / ((NUM_ARMS - 1) / 2.0)
+            thickness = max(3, int(30 * (1.0 - center_dist * 0.55) * grow))
+
+            # 팔 끝점
+            ex = origin_x + int(arm_len * math.cos(angle_rad))
+            ey = origin_y + int(arm_len * math.sin(angle_rad))
+
+            # 팔 그리기: 어두운 윤곽 → 밝은 본체 → 하이라이트
+            cv.line(overlay, (origin_x, origin_y), (ex, ey), BARK_LINE,  thickness + 8, cv.LINE_AA)
+            cv.line(overlay, (origin_x, origin_y), (ex, ey), WOOD_DARK,  thickness + 3, cv.LINE_AA)
+            cv.line(overlay, (origin_x, origin_y), (ex, ey), WOOD_MID,   thickness,     cv.LINE_AA)
+            cv.line(overlay, (origin_x, origin_y), (ex, ey), WOOD_LIGHT, max(1, thickness // 3), cv.LINE_AA)
+
+            # 나무 결 마디 링
+            if arm_len > 40:
+                for seg in range(1, 5):
+                    ratio = seg / 5.0
+                    mx_ = origin_x + int(arm_len * ratio * math.cos(angle_rad))
+                    my_ = origin_y + int(arm_len * ratio * math.sin(angle_rad))
+                    ring_r = max(2, int(thickness * 0.75))
+                    cv.circle(overlay, (mx_, my_), ring_r, BARK_LINE, 2)
+
+            # 팔 끝 손바닥
+            if grow > 0.4:
+                palm_r = max(4, int(18 * grow * (1.0 - center_dist * 0.35)))
+                cv.circle(overlay, (ex, ey), palm_r,     WOOD_MID,  -1)
+                cv.circle(overlay, (ex, ey), palm_r + 2, BARK_LINE,  2)
+                # 손가락 5개
+                for fi in range(5):
+                    fa  = angle_rad + math.radians(-40 + fi * 20)
+                    fex = ex + int((palm_r + 10) * math.cos(fa))
+                    fey = ey + int((palm_r + 10) * math.sin(fa))
+                    cv.line(overlay, (ex, ey), (fex, fey),
+                            WOOD_MID, max(1, thickness // 5), cv.LINE_AA)
+
+        cv.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
+
+        # 중앙 몸통 줄기 (팔들이 몸에서 뻗어나오는 느낌)
+        trunk_w = int(55 * grow)
+        if trunk_w > 3:
+            trunk_h = int(h * 0.28 * grow)
+            cv.line(frame, (origin_x, origin_y), (origin_x, origin_y - trunk_h),
+                    BARK_LINE, trunk_w + 4, cv.LINE_AA)
+            cv.line(frame, (origin_x, origin_y), (origin_x, origin_y - trunk_h),
+                    WOOD_DARK, trunk_w, cv.LINE_AA)
+
+        # 손 위치에 나무 인장
+        pulse = abs(math.sin(t * 0.08))
+        seal_r = int(20 + 5 * pulse)
+        cv.circle(frame, (cx, cy), seal_r,     WOOD_MID,        -1)
+        cv.circle(frame, (cx, cy), seal_r + 3, BARK_LINE,        2)
+        cv.circle(frame, (cx, cy), 7,          (200, 230, 220), -1)
+
+        # HUD 텍스트
+        label_alpha = 0.8 + 0.2 * pulse
         glow_ov = frame.copy()
-        cv.putText(glow_ov, "SAGE MODE", (w // 2 - 75, 55),
-                   cv.FONT_HERSHEY_SIMPLEX, 0.8,
-                   (0, 255, 80), 3, cv.LINE_AA)
-        cv.addWeighted(glow_ov, label_alpha, frame, 1 - label_alpha, 0, frame)
-
-    # ─── 차크라모드 ───────────────────────────────────────
-    def _draw_chakra_mode(self, frame, cx, cy, t):
-        """チャクラモード: 온몸에서 차크라가 폭발하는 보라/흰 에너지장."""
-        h, w = frame.shape[:2]
-
-        pulse = abs(math.sin(t * 0.09))
-
-        # ── 화면 가득한 차크라 에너지 오라 ──────────────────
-        for i, (base_r, base_alpha) in enumerate([
-            (min(w, h) // 2 + 40, 0.07),
-            (min(w, h) // 2,      0.10),
-            (min(w, h) // 2 - 40, 0.08),
-        ]):
-            r  = base_r + int(20 * math.sin(t * 0.09 + i * 1.5))
-            ov = frame.copy()
-            cv.circle(ov, (w // 2, h // 2), r,
-                      (int(150 + 105 * pulse), int(30 + 50 * pulse), 255), 20)
-            a = base_alpha * (0.5 + 0.5 * pulse)
-            cv.addWeighted(ov, a, frame, 1 - a, 0, frame)
-
-        # ── 화면 전체 보라빛 틴트 ────────────────────────────
-        tint = frame.copy()
-        tint[:] = (80, 10, 80)
-        cv.addWeighted(tint, 0.10 + 0.05 * pulse, frame,
-                       1 - 0.10 - 0.05 * pulse, 0, frame)
-
-        # ── 차크라 방사선 (중심에서 사방으로 뻗는 빛줄기) ──
-        np.random.seed(t % 30)
-        NUM_RAYS = 12
-        for i in range(NUM_RAYS):
-            base_a = (2 * math.pi / NUM_RAYS) * i + t * 0.04
-            base_a += np.random.uniform(-0.15, 0.15)
-            ray_len = int((min(w, h) // 2 + 60) * (0.7 + 0.3 * pulse))
-            ex = cx + int(ray_len * math.cos(base_a))
-            ey = cy + int(ray_len * math.sin(base_a))
-            bright = int(180 + 75 * pulse)
-            ov = frame.copy()
-            cv.line(ov, (cx, cy), (ex, ey),
-                    (bright, int(bright * 0.3), 255), 2, cv.LINE_AA)
-            cv.addWeighted(ov, 0.35, frame, 0.65, 0, frame)
-
-        # ── 차크라 링 여러 겹 (손 주위) ──────────────────────
-        for i, ring_r in enumerate([70, 50, 32]):
-            spin_r = ring_r + int(8 * math.sin(t * 0.1 + i * 0.8))
-            ov = frame.copy()
-            cv.circle(ov, (cx, cy), spin_r,
-                      (int(200 + 55 * pulse), int(50 + 40 * pulse), 255), 3)
-            cv.addWeighted(ov, 0.6, frame, 0.4, 0, frame)
-            # 링 위의 회전 점
-            for j in range(4):
-                a  = math.radians(t * (4 + i * 2) + j * 90)
-                px = int(cx + spin_r * math.cos(a))
-                py = int(cy + spin_r * math.sin(a))
-                cv.circle(frame, (px, py), 3 - i,
-                          (255, int(180 + 75 * pulse), 255), -1)
-
-        # ── 주기적 차크라 폭발 번쩍임 ─────────────────────
-        if t % 10 < 2:
-            flash_ov = frame.copy()
-            flash_ov[:] = (120, 20, 180)
-            cv.addWeighted(flash_ov, 0.12, frame, 0.88, 0, frame)
-
-        # ── 손 중심 코어 ──────────────────────────────────
-        core_r = int(20 + 8 * pulse)
-        ov = frame.copy()
-        cv.circle(ov, (cx, cy), core_r + 14,
-                  (int(180 + 75 * pulse), int(30 + 50 * pulse), 255), -1)
-        cv.addWeighted(ov, 0.28, frame, 0.72, 0, frame)
-        cv.circle(frame, (cx, cy), core_r,
-                  (int(220 + 35 * pulse), int(80 + 60 * pulse), 255), -1)
-        cv.circle(frame, (cx, cy), core_r + 4,
-                  (255, 200, 255), 2)
-        cv.circle(frame, (cx, cy), 7, (255, 255, 255), -1)
-
-        # ── 차크라모드 텍스트 ──────────────────────────────
-        label_alpha = 0.7 + 0.3 * pulse
-        glow_ov = frame.copy()
-        cv.putText(glow_ov, "CHAKRA MODE", (w // 2 - 90, 55),
-                   cv.FONT_HERSHEY_SIMPLEX, 0.8,
-                   (200, 50, 255), 3, cv.LINE_AA)
+        cv.putText(glow_ov, "MOKUTON SENJUSHU",
+                   (w // 2 - 130, 55),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.78,
+                   (63, 133, 180), 3, cv.LINE_AA)
         cv.addWeighted(glow_ov, label_alpha, frame, 1 - label_alpha, 0, frame)
 
     # ── HUD (프레임 내부 – 비활성화, 패널로 이전) ────────
@@ -1002,15 +900,12 @@ class NarutoJutsuRecognizer:
         self._chidori_armed   = False  # 차징 완료 → 이펙트 발동 가능
         self._chidori_right   = None   # 오른손 손목 정규화 좌표 (x, y)
 
-        # SENNIN_MODE 전용 차징 상태
-        self._sennin_charge   = 0      # 합장 유지 프레임 수
-        self._sennin_armed    = False  # 차징 완료 → 이펙트 발동
-        self._sennin_center   = None   # 합장 중심 정규화 좌표 (x, y)
+        # MOKUTON_SENJU 전용 차징 상태
+        self._mokuton_charge  = 0      # 합장 유지 프레임 수
+        self._mokuton_armed   = False  # 차징 완료 → 이펙트 발동
+        self._mokuton_center  = None   # 합장 중심 정규화 좌표 (x, y)
 
         self._hand_landmarker = None
-        self._draw_utils  = drawing_utils
-        self._draw_styles = drawing_styles
-
         if self.enabled:
             self._init_landmarker()
 
@@ -1052,9 +947,9 @@ class NarutoJutsuRecognizer:
             self._chidori_charge = 0
             self._chidori_armed  = False
             self._chidori_right  = None
-            self._sennin_charge  = 0
-            self._sennin_armed   = False
-            self._sennin_center  = None
+            self._mokuton_charge = 0
+            self._mokuton_armed  = False
+            self._mokuton_center = None
         print(f"나루토 모드: {'ON' if self.enabled else 'OFF'}")
 
     def process_frame(self, frame):
@@ -1083,15 +978,16 @@ class NarutoJutsuRecognizer:
         if self._latest_result and self._latest_result.hand_landmarks:
             all_lm = self._latest_result.hand_landmarks
 
-            # 모든 손 스켈레톤 먼저 그리기
+            # 모든 손 스켈레톤 먼저 그리기 (Tasks API는 plain list → OpenCV로 직접 그리기)
             for lm_list in all_lm:
-                self._draw_utils.draw_landmarks(
-                    frame,
-                    lm_list,
-                    HandLandmarksConnections.HAND_CONNECTIONS,
-                    self._draw_styles.get_default_hand_landmarks_style(),
-                    self._draw_styles.get_default_hand_connections_style(),
-                )
+                pts = [(int(lm.x * w), int(lm.y * h)) for lm in lm_list]
+                for conn in HandLandmarksConnections.HAND_CONNECTIONS:
+                    s, e = conn.start, conn.end
+                    if 0 <= s < len(pts) and 0 <= e < len(pts):
+                        cv.line(frame, pts[s], pts[e], (80, 200, 120), 2, cv.LINE_AA)
+                for pt in pts:
+                    cv.circle(frame, pt, 4, (0, 230, 100), -1, cv.LINE_AA)
+                    cv.circle(frame, pt, 4, (255, 255, 255), 1, cv.LINE_AA)
 
             # ── CHIDORI: 양손 위아래 겹침 → 1.5초 차징 후 발동 ──
             chidori_detected, right_xy = detect_chidori_two_hands(all_lm)
@@ -1111,24 +1007,24 @@ class NarutoJutsuRecognizer:
             if self._chidori_charge > 0 and not self._chidori_armed:
                 self._draw_chidori_charge_gauge(frame, self._chidori_charge)
 
-            # ── SENNIN_MODE: 양손 합장 → 1초 차징 후 발동 ──────
-            SENNIN_CHARGE_FRAMES = 30  # 1초 @ 30fps
-            sennin_detected, sennin_xy = detect_sennin_two_hands(all_lm)
-            if sennin_detected and not chidori_detected:
-                self._sennin_charge += 1
-                if sennin_xy:
-                    self._sennin_center = sennin_xy
-                if self._sennin_charge >= SENNIN_CHARGE_FRAMES:
-                    self._sennin_armed = True
+            # ── MOKUTON_SENJU: 양손 손가락 위로 모아 붙임 → 1초 차징 후 발동 ──
+            MOKUTON_CHARGE_FRAMES = 30  # 1초 @ 30fps
+            mokuton_detected, mokuton_xy = detect_mokuton_two_hands(all_lm)
+            if mokuton_detected and not chidori_detected:
+                self._mokuton_charge += 1
+                if mokuton_xy:
+                    self._mokuton_center = mokuton_xy
+                if self._mokuton_charge >= MOKUTON_CHARGE_FRAMES:
+                    self._mokuton_armed = True
             else:
-                if not sennin_detected:
-                    self._sennin_charge = 0
-                    if self._current_gesture != "SENNIN_MODE":
-                        self._sennin_armed = False
+                if not mokuton_detected:
+                    self._mokuton_charge = 0
+                    if self._current_gesture != "MOKUTON_SENJU":
+                        self._mokuton_armed = False
 
-            # 선인모드 차징 게이지
-            if self._sennin_charge > 0 and not self._sennin_armed:
-                self._draw_sennin_charge_gauge(frame, self._sennin_charge, SENNIN_CHARGE_FRAMES)
+            # 목둔 차징 게이지
+            if self._mokuton_charge > 0 and not self._mokuton_armed:
+                self._draw_mokuton_charge_gauge(frame, self._mokuton_charge, MOKUTON_CHARGE_FRAMES)
 
             # 차징 완료 → CHIDORI 이펙트 발동 (오른손 손목 위치)
             if self._chidori_armed:
@@ -1139,13 +1035,13 @@ class NarutoJutsuRecognizer:
                         int(self._chidori_right[1] * h),
                     )
 
-            # 차징 완료 → SENNIN_MODE 이펙트 발동
-            elif self._sennin_armed:
-                gesture = "SENNIN_MODE"
-                if self._sennin_center:
+            # 차징 완료 → MOKUTON_SENJU 이펙트 발동
+            elif self._mokuton_armed:
+                gesture = "MOKUTON_SENJU"
+                if self._mokuton_center:
                     palm_center = (
-                        int(self._sennin_center[0] * w),
-                        int(self._sennin_center[1] * h),
+                        int(self._mokuton_center[0] * w),
+                        int(self._mokuton_center[1] * h),
                     )
 
             # ── KATON: 양손 모두 검지+중지만 위로 핀 상태 ──
@@ -1165,16 +1061,16 @@ class NarutoJutsuRecognizer:
                         gesture = g
                         break
         else:
-            # 손이 사라지면 CHIDORI/SENNIN 차징 리셋 (이펙트 발동 중이면 유지)
+            # 손이 사라지면 CHIDORI/MOKUTON 차징 리셋 (이펙트 발동 중이면 유지)
             if self._current_gesture != "CHIDORI":
                 self._chidori_charge = 0
                 self._chidori_armed  = False
-            if self._current_gesture != "SENNIN_MODE":
-                self._sennin_charge  = 0
-                self._sennin_armed   = False
+            if self._current_gesture != "MOKUTON_SENJU":
+                self._mokuton_charge = 0
+                self._mokuton_armed  = False
 
         # 안정적 제스처 인식 (버퍼링) — CHIDORI/SENNIN은 버퍼 우선순위 최상위
-        if gesture in ("CHIDORI", "SENNIN_MODE"):
+        if gesture in ("CHIDORI", "MOKUTON_SENJU"):
             stable = gesture
             self._gesture_buffer.clear()
         else:
@@ -1190,8 +1086,8 @@ class NarutoJutsuRecognizer:
             # 이펙트가 종료되면 armed 해제
             if self._current_gesture == "CHIDORI":
                 self._chidori_armed = False
-            if self._current_gesture == "SENNIN_MODE":
-                self._sennin_armed = False
+            if self._current_gesture == "MOKUTON_SENJU":
+                self._mokuton_armed = False
 
         self._current_gesture = stable
 
@@ -1226,26 +1122,26 @@ class NarutoJutsuRecognizer:
                    cv.FONT_HERSHEY_SIMPLEX, 0.48,
                    (180, 220, 255), 1, cv.LINE_AA)
 
-    def _draw_sennin_charge_gauge(self, frame, charge, max_charge):
-        """선인모드 차징 게이지를 화면 하단에 표시."""
+    def _draw_mokuton_charge_gauge(self, frame, charge, max_charge):
+        """목둔 차징 게이지를 화면 하단에 표시."""
         h, w = frame.shape[:2]
         progress = min(charge / max_charge, 1.0)
-        bar_w    = 200
+        bar_w    = 220
         bar_h    = 10
         x0 = (w - bar_w) // 2
         y0 = h - 50
         # 배경
-        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (20, 40, 20), -1)
-        # 채워진 부분 (초록/황금)
+        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (20, 30, 20), -1)
+        # 채워진 부분 (나무/갈색)
         filled = int(bar_w * progress)
-        cv.rectangle(frame, (x0, y0), (x0 + filled, y0 + bar_h), (0, 220, 80), -1)
+        cv.rectangle(frame, (x0, y0), (x0 + filled, y0 + bar_h), (43, 90, 139), -1)
         # 테두리
-        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (80, 255, 120), 1)
+        cv.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (63, 133, 180), 1)
         # 텍스트
-        cv.putText(frame, "SAGE MODE CHARGING...",
-                   (x0 - 20, y0 - 8),
+        cv.putText(frame, "MOKUTON CHARGING...",
+                   (x0 - 15, y0 - 8),
                    cv.FONT_HERSHEY_SIMPLEX, 0.48,
-                   (80, 255, 120), 1, cv.LINE_AA)
+                   (63, 133, 180), 1, cv.LINE_AA)
 
     def _stable_gesture(self):
         """버퍼 안에서 다수결로 안정된 제스처를 반환."""
@@ -1290,8 +1186,7 @@ JUTSU_PANEL_INFO = [
     ("KAGE_BUNSHIN", "검지 + 중지 (V)",           "KAGE BUNSHIN", (200, 200, 255)),
     ("KATON",        "[양손] 검지+중지 위로",      "KATON",        ( 50,  80, 255)),
     ("CHIDORI",      "[양손] 위아래 겹침 1.5초",   "CHIDORI",      (180, 220, 255)),
-    ("SENNIN_MODE",  "[양손] 검지+중지 십자 1초",  "SENNIN MODE",  ( 80, 220,  80)),
-    ("CHAKRA_MODE",  "엄지+새끼 핌",               "CHAKRA MODE",  (200,  80, 255)),
+    ("MOKUTON_SENJU", "[양손] 손가락 위로 모아 1초", "MOKUTON SENJU", ( 43,  90, 139)),
 ]
 
 
@@ -1432,18 +1327,50 @@ def build_jutsu_panel(panel_w: int, panel_h: int,
 #  PIL 기반 유니코드/이모지 텍스트 렌더러
 # ───────────────────────────────────────────────
 
-# 폰트 경로 (macOS 기본 경로)
-_FONT_KO   = "/System/Library/Fonts/AppleSDGothicNeo.ttc"          # 한글+영문
-_FONT_EMOJI = "/System/Library/Fonts/Apple Color Emoji.ttc"        # 이모지
+# OS별 폰트 후보 (앞에서부터 우선순위)
+_FONT_KO_CANDIDATES = [
+    # Windows
+    "C:/Windows/Fonts/malgun.ttf",          # 맑은 고딕
+    "C:/Windows/Fonts/gulim.ttc",           # 굴림
+    "C:/Windows/Fonts/arial.ttf",
+    # macOS
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    # Linux
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
+_FONT_EMOJI_CANDIDATES = [
+    # Windows
+    "C:/Windows/Fonts/seguiemj.ttf",        # Segoe UI Emoji
+    # macOS
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+    # Linux (컬러 이모지)
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+]
 
 
 def _load_font(size: int, emoji: bool = False):
     """PIL 폰트 로드 (실패 시 기본 폰트 반환)."""
-    try:
-        path = _FONT_EMOJI if emoji else _FONT_KO
-        return ImageFont.truetype(path, size)
-    except Exception:
-        return ImageFont.load_default()
+    candidates = _FONT_EMOJI_CANDIDATES if emoji else _FONT_KO_CANDIDATES
+
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+
+    # 파일명만으로도 로드 가능한 경우가 있어 마지막으로 시도
+    name_candidates = ["seguiemj.ttf", "malgun.ttf", "arial.ttf", "DejaVuSans.ttf"]
+    for name in name_candidates:
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            pass
+
+    return ImageFont.load_default()
 
 
 def _pil_put_text(img_bgr: np.ndarray, text: str,
